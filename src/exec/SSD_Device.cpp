@@ -1,12 +1,8 @@
 #include <vector>
 #include <stdexcept>
 #include <ctime>
-#include <cmath>
-#include <limits>
-#include <map>
 #include "SSD_Device.h"
 #include "../ssd/ONFI_Channel_Base.h"
-#include "../ssd/FTL.h"
 #include "../ssd/Flash_Block_Manager.h"
 #include "../ssd/Data_Cache_Manager_Flash_Advanced.h"
 #include "../ssd/Data_Cache_Manager_Flash_Simple.h"
@@ -20,70 +16,17 @@
 #include "../ssd/ONFI_Channel_NVDDR2.h"
 #include "../ssd/NVM_PHY_ONFI_NVDDR2.h"
 #include "../utils/Logical_Address_Partitioning_Unit.h"
-#include "../nvm_chip/flash_memory/Physical_Page_Address.h"
+#include "../host/IO_Flow_Base.h"
+#include "../host/SATA_HBA.h"
 
-namespace {
-	struct Erase_Distribution_Summary
-	{
-		uint64_t Block_count = 0;
-		uint64_t Sum_erase_count = 0;
-		double Sum_square_erase_count = 0.0;
-		unsigned int Min_erase_count = std::numeric_limits<unsigned int>::max();
-		unsigned int Max_erase_count = 0;
-	};
-
-	void update_erase_summary(Erase_Distribution_Summary& summary, unsigned int erase_count)
-	{
-		summary.Block_count++;
-		summary.Sum_erase_count += erase_count;
-		summary.Sum_square_erase_count += (double)erase_count * (double)erase_count;
-		if (erase_count < summary.Min_erase_count) {
-			summary.Min_erase_count = erase_count;
-		}
-		if (erase_count > summary.Max_erase_count) {
-			summary.Max_erase_count = erase_count;
-		}
-	}
-
-	double erase_avg(const Erase_Distribution_Summary& summary)
-	{
-		return summary.Block_count == 0 ? 0.0 : (double)summary.Sum_erase_count / (double)summary.Block_count;
-	}
-
-	double erase_stddev(const Erase_Distribution_Summary& summary)
-	{
-		if (summary.Block_count == 0) {
-			return 0.0;
-		}
-		double avg = erase_avg(summary);
-		double variance = (summary.Sum_square_erase_count / (double)summary.Block_count) - (avg * avg);
-		if (variance < 0) {
-			variance = 0;
-		}
-		return std::sqrt(variance);
-	}
-
-	unsigned int erase_min_or_zero(const Erase_Distribution_Summary& summary)
-	{
-		return summary.Block_count == 0 ? 0 : summary.Min_erase_count;
-	}
-}
-
-SSD_Device *SSD_Device::my_instance; //Used in static functions
-
-SSD_Device::SSD_Device(Device_Parameter_Set *parameters, std::vector<IO_Flow_Parameter_Set *> *io_flows) : MQSimEngine::Sim_Object("SSDDevice")
+SSD_Device::SSD_Device(Device_Parameter_Set *parameters, std::vector<IO_Flow_Parameter_Set *> *io_flows, const std::string& id)
+	: MQSimEngine::Sim_Object(id)
 {
 	SSD_Device *device = this;
-	my_instance = device; //used for static functions
 	Simulator->AddObject(device);
 
 	device->Preconditioning_required = parameters->Enabled_Preconditioning;
 	device->Memory_Type = parameters->Memory_Type;
-	device->Die_no_per_chip = parameters->Flash_Parameters.Die_No_Per_Chip;
-	device->Plane_no_per_die = parameters->Flash_Parameters.Plane_No_Per_Die;
-	device->Block_no_per_plane = parameters->Flash_Parameters.Block_No_Per_Plane;
-	device->Page_no_per_block = parameters->Flash_Parameters.Page_No_Per_Block;
-	device->Page_capacity_bytes = parameters->Flash_Parameters.Page_Capacity;
 
 	switch (Memory_Type)
 	{
@@ -469,6 +412,31 @@ void SSD_Device::Perform_preconditioning(std::vector<Utils::Workload_Statistics 
 	}
 }
 
+void SSD_Device::Initialize_io_streams(const std::vector<Host_Components::IO_Flow_Base*>& io_flows,
+	Host_Components::SATA_HBA* sata_hba)
+{
+	switch (Host_interface->GetType()) {
+		case HostInterface_Types::NVME:
+			for (uint16_t flow_cntr = 0; flow_cntr < io_flows.size(); flow_cntr++) {
+				((SSD_Components::Host_Interface_NVMe*) Host_interface)->Create_new_stream(
+					io_flows[flow_cntr]->Priority_class(),
+					io_flows[flow_cntr]->Get_start_lsa_on_device(), io_flows[flow_cntr]->Get_end_lsa_address_on_device(),
+					io_flows[flow_cntr]->Get_nvme_queue_pair_info()->Submission_queue_memory_base_address,
+					io_flows[flow_cntr]->Get_nvme_queue_pair_info()->Completion_queue_memory_base_address);
+			}
+			break;
+		case HostInterface_Types::SATA:
+			if (sata_hba != NULL) {
+				((SSD_Components::Host_Interface_SATA*) Host_interface)->Set_ncq_address(
+					sata_hba->Get_sata_ncq_info()->Submission_queue_memory_base_address,
+					sata_hba->Get_sata_ncq_info()->Completion_queue_memory_base_address);
+			}
+			break;
+		default:
+			break;
+	}
+}
+
 void SSD_Device::Start_simulation()
 {
 }
@@ -483,127 +451,15 @@ void SSD_Device::Execute_simulator_event(MQSimEngine::Sim_Event *event)
 
 void SSD_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWriter &xmlwriter)
 {
-	std::string tmp = ID();
+	std::string tmp;
+	tmp = ID();
 	xmlwriter.Write_open_tag(tmp);
 
 	this->Host_interface->Report_results_in_XML(ID(), xmlwriter);
 	if (Memory_Type == NVM::NVM_Type::FLASH)
 	{
-		SSD_Components::FTL* ftl = static_cast<SSD_Components::FTL*>(this->Firmware);
-		ftl->Report_results_in_XML(ID(), xmlwriter);
-		ftl->TSU->Report_results_in_XML(ID(), xmlwriter);
-
-		unsigned long long total_flash_page_programs = 0;
-		unsigned long long total_flash_page_erases = 0;
-		Erase_Distribution_Summary ssd_summary;
-		std::map<unsigned int, uint64_t> ssd_erase_histogram;
-		unsigned int plane_count = 0;
-		unsigned int worst_plane_spread = 0;
-		double sum_plane_spread = 0.0;
-
-		if (ftl != nullptr && ftl->BlockManager != nullptr) {
-			for (unsigned int ch = 0; ch < Channel_count; ch++) {
-				SSD_Components::ONFI_Channel_Base* channel = static_cast<SSD_Components::ONFI_Channel_Base*>(Channels[ch]);
-				for (unsigned int chip = 0; chip < Chip_no_per_channel; chip++) {
-					NVM::FlashMemory::Flash_Chip* flash_chip = channel->Chips[chip];
-					if (flash_chip != nullptr) {
-						total_flash_page_programs += flash_chip->Get_total_program_count();
-						total_flash_page_erases += flash_chip->Get_total_erase_count();
-					}
-					for (unsigned int die = 0; die < Die_no_per_chip; die++) {
-						for (unsigned int plane = 0; plane < Plane_no_per_die; plane++) {
-							NVM::FlashMemory::Physical_Page_Address plane_address(ch, chip, die, plane, 0, 0);
-							SSD_Components::PlaneBookKeepingType* pbke = ftl->BlockManager->Get_plane_bookkeeping_entry(plane_address);
-							if (pbke == nullptr || pbke->Blocks == nullptr) {
-								continue;
-							}
-
-							Erase_Distribution_Summary plane_summary;
-							for (unsigned int block = 0; block < Block_no_per_plane; block++) {
-								unsigned int erase_count = pbke->Blocks[block].Erase_count;
-								update_erase_summary(plane_summary, erase_count);
-								update_erase_summary(ssd_summary, erase_count);
-								ssd_erase_histogram[erase_count]++;
-							}
-
-							unsigned int plane_spread = plane_summary.Block_count == 0 ? 0 : (plane_summary.Max_erase_count - erase_min_or_zero(plane_summary));
-							if (plane_spread > worst_plane_spread) {
-								worst_plane_spread = plane_spread;
-							}
-							sum_plane_spread += plane_spread;
-							plane_count++;
-
-							std::string plane_tag = ID() + ".WearLeveling.Plane";
-							xmlwriter.Write_open_tag(plane_tag);
-							xmlwriter.Write_attribute_string("SSD_ID", "0");
-							xmlwriter.Write_attribute_string("Channel", std::to_string(ch));
-							xmlwriter.Write_attribute_string("Chip", std::to_string(chip));
-							xmlwriter.Write_attribute_string("Die", std::to_string(die));
-							xmlwriter.Write_attribute_string("Plane", std::to_string(plane));
-							xmlwriter.Write_attribute_string("Block_Count", std::to_string(plane_summary.Block_count));
-							xmlwriter.Write_attribute_string("Min_Block_Erase_Count", std::to_string(erase_min_or_zero(plane_summary)));
-							xmlwriter.Write_attribute_string("Max_Block_Erase_Count", std::to_string(plane_summary.Max_erase_count));
-							xmlwriter.Write_attribute_string("Avg_Block_Erase_Count", std::to_string(erase_avg(plane_summary)));
-							xmlwriter.Write_attribute_string("StdDev_Block_Erase_Count", std::to_string(erase_stddev(plane_summary)));
-							xmlwriter.Write_attribute_string("Erase_Count_Spread", std::to_string(plane_spread));
-							xmlwriter.Write_close_tag();
-						}
-					}
-				}
-			}
-		}
-
-		unsigned long long host_write_bytes = (unsigned long long)External_host_write_bytes;
-		unsigned long long flash_programmed_bytes = total_flash_page_programs * (unsigned long long)Page_capacity_bytes;
-		double approx_flash_wa = host_write_bytes == 0 ? 0.0 :
-			(double)flash_programmed_bytes / (double)host_write_bytes;
-
-		std::string wl_tag = ID() + ".WearLeveling";
-		xmlwriter.Write_open_tag(wl_tag);
-
-		std::string ssd_tag = wl_tag + ".SSD";
-		xmlwriter.Write_open_tag(ssd_tag);
-		xmlwriter.Write_attribute_string("SSD_ID", "0");
-		xmlwriter.Write_attribute_string("Plane_Count", std::to_string(plane_count));
-		xmlwriter.Write_attribute_string("Block_Count", std::to_string(ssd_summary.Block_count));
-		xmlwriter.Write_attribute_string("Min_Block_Erase_Count", std::to_string(erase_min_or_zero(ssd_summary)));
-		xmlwriter.Write_attribute_string("Max_Block_Erase_Count", std::to_string(ssd_summary.Max_erase_count));
-		xmlwriter.Write_attribute_string("Avg_Block_Erase_Count", std::to_string(erase_avg(ssd_summary)));
-		xmlwriter.Write_attribute_string("StdDev_Block_Erase_Count", std::to_string(erase_stddev(ssd_summary)));
-		xmlwriter.Write_attribute_string("Erase_Count_Spread", std::to_string(ssd_summary.Block_count == 0 ? 0 : (ssd_summary.Max_erase_count - erase_min_or_zero(ssd_summary))));
-		xmlwriter.Write_attribute_string("Worst_Plane_Erase_Spread", std::to_string(worst_plane_spread));
-		xmlwriter.Write_attribute_string("Average_Plane_Erase_Spread", std::to_string(plane_count == 0 ? 0.0 : sum_plane_spread / (double)plane_count));
-		xmlwriter.Write_attribute_string("Flash_Page_Program_Count", std::to_string(total_flash_page_programs));
-		xmlwriter.Write_attribute_string("Flash_Page_Erase_Count", std::to_string(total_flash_page_erases));
-		xmlwriter.Write_attribute_string("Host_Write_Bytes", std::to_string(host_write_bytes));
-		xmlwriter.Write_attribute_string("Approx_Flash_Programmed_Bytes", std::to_string(flash_programmed_bytes));
-		xmlwriter.Write_attribute_string("Approx_Flash_Write_Amplification", std::to_string(approx_flash_wa));
-		xmlwriter.Write_close_tag();
-
-		std::string hist_tag = wl_tag + ".EraseHistogram.SSD";
-		xmlwriter.Write_open_tag(hist_tag);
-		xmlwriter.Write_attribute_string("SSD_ID", "0");
-		xmlwriter.Write_attribute_string("Block_Count", std::to_string(ssd_summary.Block_count));
-		for (const auto& bin : ssd_erase_histogram) {
-			std::string bin_tag = hist_tag + ".Bin";
-			xmlwriter.Write_open_tag(bin_tag);
-			xmlwriter.Write_attribute_string("Erase_Count", std::to_string(bin.first));
-			xmlwriter.Write_attribute_string("Block_Count", std::to_string(bin.second));
-			xmlwriter.Write_attribute_string("Fraction", std::to_string(ssd_summary.Block_count == 0 ? 0.0 : (double)bin.second / (double)ssd_summary.Block_count));
-			xmlwriter.Write_close_tag();
-		}
-		xmlwriter.Write_close_tag();
-
-		std::string wa_tag = wl_tag + ".WriteAmplification";
-		xmlwriter.Write_open_tag(wa_tag);
-		xmlwriter.Write_attribute_string("Host_Write_Bytes", std::to_string(host_write_bytes));
-		xmlwriter.Write_attribute_string("Approx_Flash_Page_Programs", std::to_string(total_flash_page_programs));
-		xmlwriter.Write_attribute_string("Approx_Flash_Page_Erases", std::to_string(total_flash_page_erases));
-		xmlwriter.Write_attribute_string("Approx_Flash_Programmed_Bytes", std::to_string(flash_programmed_bytes));
-		xmlwriter.Write_attribute_string("Approx_Flash_Write_Amplification", std::to_string(approx_flash_wa));
-		xmlwriter.Write_close_tag();
-
-		xmlwriter.Write_close_tag();
+		((SSD_Components::FTL *)this->Firmware)->Report_results_in_XML(ID(), xmlwriter);
+		((SSD_Components::FTL *)this->Firmware)->TSU->Report_results_in_XML(ID(), xmlwriter);
 
 		for (unsigned int channel_cntr = 0; channel_cntr < Channel_count; channel_cntr++)
 		{
@@ -623,10 +479,10 @@ unsigned int SSD_Device::Get_no_of_LHAs_in_an_NVM_write_unit()
 
 LPA_type SSD_Device::Convert_host_logical_address_to_device_address(LHA_type lha)
 {
-	return my_instance->Firmware->Convert_host_logical_address_to_device_address(lha);
+	return Firmware->Convert_host_logical_address_to_device_address(lha);
 }
 
 page_status_type SSD_Device::Find_NVM_subunit_access_bitmap(LHA_type lha)
 {
-	return my_instance->Firmware->Find_NVM_subunit_access_bitmap(lha);
+	return Firmware->Find_NVM_subunit_access_bitmap(lha);
 }

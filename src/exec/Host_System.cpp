@@ -2,6 +2,7 @@
 #include "Host_System.h"
 #include "../ssd/Host_Interface_Base.h"
 #include "../ssd/Host_Interface_NVMe.h"
+#include "../ssd/Host_Interface_SATA.h"
 #include "../host/PCIe_Root_Complex.h"
 #include "../host/IO_Flow_Synthetic.h"
 #include "../host/IO_Flow_Trace_Based.h"
@@ -12,6 +13,7 @@ Host_System::Host_System(Host_Parameter_Set* parameters, bool preconditioning_re
 	MQSimEngine::Sim_Object("Host"), preconditioning_required(preconditioning_required)
 {
 	Simulator->AddObject(this);
+	this->storage_device = NULL;
 
 	//Create the main components of the host system
 	if (((SSD_Components::Host_Interface_NVMe*)ssd_host_interface)->GetType() == HostInterface_Types::SATA) {
@@ -27,7 +29,12 @@ Host_System::Host_System(Host_Parameter_Set* parameters, bool preconditioning_re
 	Simulator->AddObject(this->Link);
 
 	//Create IO flows
-	LHA_type address_range_per_flow = ssd_host_interface->Get_max_logical_sector_address() / parameters->IO_Flow_Definitions.size();
+	LHA_type base_device_lha_count = Utils::Logical_Address_Partitioning_Unit::Get_total_device_lha_count();
+	LHA_type host_visible_lha_count = ssd_host_interface->Get_max_logical_sector_address();
+	LHA_type flow_lha_scale = 1;
+	if (base_device_lha_count > 0 && host_visible_lha_count > base_device_lha_count && host_visible_lha_count % base_device_lha_count == 0) {
+		flow_lha_scale = host_visible_lha_count / base_device_lha_count;
+	}
 	for (uint16_t flow_id = 0; flow_id < parameters->IO_Flow_Definitions.size(); flow_id++) {
 		Host_Components::IO_Flow_Base* io_flow = NULL;
 		//No flow should ask for I/O queue id 0, it is reserved for NVMe Admin command queue pair
@@ -42,6 +49,13 @@ Host_System::Host_System(Host_Parameter_Set* parameters, bool preconditioning_re
 				break;
 		}
 
+		LHA_type flow_start_lha = Utils::Logical_Address_Partitioning_Unit::Start_lha_available_to_flow(flow_id);
+		LHA_type flow_end_lha = Utils::Logical_Address_Partitioning_Unit::End_lha_available_to_flow(flow_id);
+		if (flow_lha_scale > 1) {
+			flow_start_lha *= flow_lha_scale;
+			flow_end_lha = (flow_end_lha + 1) * flow_lha_scale - 1;
+		}
+
 		switch (parameters->IO_Flow_Definitions[flow_id]->Type) {
 			case Flow_Type::SYNTHETIC: {
 				IO_Flow_Parameter_Set_Synthetic* flow_param = (IO_Flow_Parameter_Set_Synthetic*)parameters->IO_Flow_Definitions[flow_id];
@@ -49,8 +63,8 @@ Host_System::Host_System(Host_Parameter_Set* parameters, bool preconditioning_re
 					flow_param->Working_Set_Percentage = 100;
 				}
 				io_flow = new Host_Components::IO_Flow_Synthetic(this->ID() + ".IO_Flow.Synth.No_" + std::to_string(flow_id), flow_id,
-					Utils::Logical_Address_Partitioning_Unit::Start_lha_available_to_flow(flow_id),
-					Utils::Logical_Address_Partitioning_Unit::End_lha_available_to_flow(flow_id),
+					flow_start_lha,
+					flow_end_lha,
 					((double)flow_param->Working_Set_Percentage / 100.0), FLOW_ID_TO_Q_ID(flow_id), nvme_sq_size, nvme_cq_size,
 					flow_param->Priority_Class, flow_param->Read_Percentage / double(100.0), flow_param->Address_Distribution, flow_param->Percentage_of_Hot_Region / double(100.0),
 					flow_param->Request_Size_Distribution, flow_param->Average_Request_Size, flow_param->Variance_Request_Size,
@@ -64,7 +78,7 @@ Host_System::Host_System(Host_Parameter_Set* parameters, bool preconditioning_re
 			case Flow_Type::TRACE: {
 				IO_Flow_Parameter_Set_Trace_Based * flow_param = (IO_Flow_Parameter_Set_Trace_Based*)parameters->IO_Flow_Definitions[flow_id];
 				io_flow = new Host_Components::IO_Flow_Trace_Based(this->ID() + ".IO_Flow.Trace." + flow_param->File_Path, flow_id,
-					Utils::Logical_Address_Partitioning_Unit::Start_lha_available_to_flow(flow_id), Utils::Logical_Address_Partitioning_Unit::End_lha_available_to_flow(flow_id),
+					flow_start_lha, flow_end_lha,
 					FLOW_ID_TO_Q_ID(flow_id), nvme_sq_size, nvme_cq_size,
 					flow_param->Priority_Class, flow_param->Initial_Occupancy_Percentage / double(100.0),
 					flow_param->File_Path, flow_param->Time_Unit, flow_param->Relay_Count, flow_param->Percentage_To_Be_Executed,
@@ -91,7 +105,7 @@ Host_System::~Host_System()
 	delete this->Link;
 	delete this->PCIe_root_complex;
 	delete this->PCIe_switch;
-	if (ssd_device->Host_interface->GetType() == HostInterface_Types::SATA) {
+	if (storage_device != NULL && storage_device->Get_host_interface()->GetType() == HostInterface_Types::SATA) {
 		delete this->SATA_hba;
 	}
 	for (uint16_t flow_id = 0; flow_id < this->IO_flows.size(); flow_id++) {
@@ -99,11 +113,11 @@ Host_System::~Host_System()
 	}
 }
 
-void Host_System::Attach_ssd_device(SSD_Device* ssd_device)
+void Host_System::Attach_storage_device(Storage_Device* storage_device)
 {
-	ssd_device->Attach_to_host(this->PCIe_switch);
-	this->PCIe_switch->Attach_ssd_device(ssd_device->Host_interface);
-	this->ssd_device = ssd_device;
+	storage_device->Attach_to_host(this->PCIe_switch);
+	this->PCIe_switch->Attach_ssd_device(storage_device->Get_host_interface());
+	this->storage_device = storage_device;
 }
 
 const std::vector<Host_Components::IO_Flow_Base*> Host_System::Get_io_flows()
@@ -113,25 +127,11 @@ const std::vector<Host_Components::IO_Flow_Base*> Host_System::Get_io_flows()
 
 void Host_System::Start_simulation()
 {
-	switch (ssd_device->Host_interface->GetType()) {
-		case HostInterface_Types::NVME:
-			for (uint16_t flow_cntr = 0; flow_cntr < IO_flows.size(); flow_cntr++) {
-				((SSD_Components::Host_Interface_NVMe*) ssd_device->Host_interface)->Create_new_stream(
-					IO_flows[flow_cntr]->Priority_class(),
-					IO_flows[flow_cntr]->Get_start_lsa_on_device(), IO_flows[flow_cntr]->Get_end_lsa_address_on_device(),
-					IO_flows[flow_cntr]->Get_nvme_queue_pair_info()->Submission_queue_memory_base_address, IO_flows[flow_cntr]->Get_nvme_queue_pair_info()->Completion_queue_memory_base_address);
-			}
-			break;
-		case HostInterface_Types::SATA:
-			((SSD_Components::Host_Interface_SATA*) ssd_device->Host_interface)->Set_ncq_address(
-				SATA_hba->Get_sata_ncq_info()->Submission_queue_memory_base_address, SATA_hba->Get_sata_ncq_info()->Completion_queue_memory_base_address);
-		default:
-			break;
-	}
+	storage_device->Initialize_io_streams(IO_flows, SATA_hba);
 
 	if (preconditioning_required) {
 		std::vector<Utils::Workload_Statistics*> workload_stats = get_workloads_statistics();
-		ssd_device->Perform_preconditioning(workload_stats);
+		storage_device->Perform_preconditioning(workload_stats);
 		for (auto &stat : workload_stats) {
 			delete stat;
 		}
@@ -180,10 +180,11 @@ std::vector<Utils::Workload_Statistics*> Host_System::get_workloads_statistics()
 
 	for (auto &workload : IO_flows) {
 		Utils::Workload_Statistics* s = new Utils::Workload_Statistics;
-		workload->Get_statistics(*s, ssd_device->Convert_host_logical_address_to_device_address, ssd_device->Find_NVM_subunit_access_bitmap);
+		workload->Get_statistics(*s,
+			[this](LHA_type lha) { return this->storage_device->Convert_host_logical_address_to_device_address(lha); },
+			[this](LHA_type lha) { return this->storage_device->Find_NVM_subunit_access_bitmap(lha); });
 		stats.push_back(s);
 	}
 
 	return stats;
 }
-

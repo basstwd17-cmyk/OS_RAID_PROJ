@@ -231,8 +231,9 @@ IO_Flow_Synthetic::IO_Flow_Synthetic(const sim_object_id_type &name, uint16_t fl
 		}
 	}
 
-	void IO_Flow_Synthetic::Get_statistics(Utils::Workload_Statistics& stats, LPA_type(*Convert_host_logical_address_to_device_address)(LHA_type lha),
-		page_status_type(*Find_NVM_subunit_access_bitmap)(LHA_type lha))
+	void IO_Flow_Synthetic::Get_statistics(Utils::Workload_Statistics& stats,
+		const std::function<LPA_type(LHA_type lha)>& Convert_host_logical_address_to_device_address,
+		const std::function<page_status_type(LHA_type lha)>& Find_NVM_subunit_access_bitmap)
 	{
 		stats.Type = Utils::Workload_Type::SYNTHETIC;
 		stats.generator_type = generator_type;

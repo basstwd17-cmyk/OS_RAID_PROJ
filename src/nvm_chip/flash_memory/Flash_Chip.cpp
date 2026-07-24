@@ -48,7 +48,7 @@ namespace NVM
 			delete[] _programLatency;
 		}
 
-		void Flash_Chip::Connect_to_chip_ready_signal(ChipReadySignalHandlerType function)
+		void Flash_Chip::Connect_to_chip_ready_signal(const ChipReadySignalHandlerType& function)
 		{
 			connectedReadyHandlers.push_back(function);
 		}
@@ -194,9 +194,8 @@ namespace NVM
 
 		void Flash_Chip::broadcast_ready_signal(Flash_Command* command)
 		{
-			for (std::vector<ChipReadySignalHandlerType>::iterator it = connectedReadyHandlers.begin();
-				it != connectedReadyHandlers.end(); it++) {
-				(*it)(this, command);
+			for (auto &handler : connectedReadyHandlers) {
+				handler(this, command);
 			}
 		}
 

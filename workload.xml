@@ -83,8 +83,8 @@
 			<Chip_IDs>0,1</Chip_IDs>
 			<Die_IDs>0,1</Die_IDs>
 			<Plane_IDs>0,1</Plane_IDs>
-			<Initial_Occupancy_Percentage>75</Initial_Occupancy_Percentage>
-			<Working_Set_Percentage>50</Working_Set_Percentage>
+			<Initial_Occupancy_Percentage>10</Initial_Occupancy_Percentage>
+			<Working_Set_Percentage>80</Working_Set_Percentage>
 			<Synthetic_Generator_Type>QUEUE_DEPTH</Synthetic_Generator_Type>
 			<Read_Percentage>100</Read_Percentage>
 			<Address_Distribution>RANDOM_UNIFORM</Address_Distribution>

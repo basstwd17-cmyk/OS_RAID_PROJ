@@ -5,9 +5,6 @@ LDFLAGS ?=
 LDLIBS ?=
 
 MODULES := exec host nvm_chip nvm_chip/flash_memory sim ssd utils
-ifneq ($(wildcard src/policy),)
-MODULES += policy
-endif
 
 SRC_DIRS := $(addprefix src/,$(MODULES)) src
 SOURCES := $(sort $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.cpp)))

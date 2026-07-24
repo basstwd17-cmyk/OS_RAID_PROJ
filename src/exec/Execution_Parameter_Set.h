@@ -10,8 +10,10 @@
 class Execution_Parameter_Set : public Parameter_Set_Base
 {
 public:
-	static Host_Parameter_Set Host_Configuration;
-	static Device_Parameter_Set SSD_Device_Configuration;
+// Host_Parameter_Set과 Device_Parameter_Set을 멤버로 갖도록 변경
+	Execution_Parameter_Set();
+	Host_Parameter_Set Host_Configuration;
+	Device_Parameter_Set SSD_Device_Configuration;
 
 	void XML_serialize(Utils::XmlWriter& xmlwriter);
 	void XML_deserialize(rapidxml::xml_node<> *node);

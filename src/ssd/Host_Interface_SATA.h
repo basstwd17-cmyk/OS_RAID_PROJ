@@ -40,6 +40,7 @@ namespace SSD_Components
 		void Submission_queue_tail_pointer_update(uint16_t tail_pointer_value);
 		void Completion_queue_head_pointer_update(uint16_t head_pointer_value);
 		void Handle_new_arrived_request(User_Request* request);
+		void Handle_new_arrived_write_request(User_Request* request);
 		void Handle_arrived_write_data(User_Request* request);
 		void Handle_serviced_request(User_Request* request);
 	private:

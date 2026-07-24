@@ -513,21 +513,6 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 		return (uint32_t)(STAT_max_request_delay / SIM_TIME_TO_MICROSECONDS_COEFF);
 	}
 
-	uint64_t IO_Flow_Base::Get_transferred_bytes_total() const
-	{
-		return (uint64_t)STAT_transferred_bytes_total;
-	}
-
-	uint64_t IO_Flow_Base::Get_transferred_bytes_read() const
-	{
-		return (uint64_t)STAT_transferred_bytes_read;
-	}
-
-	uint64_t IO_Flow_Base::Get_transferred_bytes_write() const
-	{
-		return (uint64_t)STAT_transferred_bytes_write;
-	}
-
 	uint32_t IO_Flow_Base::Get_device_response_time_short_term()
 	{
 		if (STAT_serviced_request_count_short_term == 0) {

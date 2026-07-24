@@ -43,7 +43,9 @@ namespace SSD_Components
 	void Data_Cache_Manager_Flash_Simple::Setup_triggers()
 	{
 		Data_Cache_Manager_Base::Setup_triggers();
-		flash_controller->ConnectToTransactionServicedSignal(handle_transaction_serviced_signal_from_PHY);
+		flash_controller->ConnectToTransactionServicedSignal([this](NVM_Transaction_Flash* transaction) {
+			this->handle_transaction_serviced_signal_from_PHY(transaction);
+		});
 	}
 
 	void Data_Cache_Manager_Flash_Simple::Do_warmup(std::vector<Utils::Workload_Statistics*> workload_stats)
@@ -219,7 +221,7 @@ namespace SSD_Components
 		}
 
 		if (transaction->Source == Transaction_Source_Type::USERIO)
-			_my_instance->broadcast_user_memory_transaction_serviced_signal(transaction);
+			broadcast_user_memory_transaction_serviced_signal(transaction);
 		/* This is an update read (a read that is generated for a write request that partially updates page data).
 		*  An update read transaction is issued in Address Mapping Unit, but is consumed in data cache manager.*/
 		if (transaction->Type == Transaction_Type::READ) {
@@ -227,51 +229,51 @@ namespace SSD_Components
 				((NVM_Transaction_Flash_RD*)transaction)->RelatedWrite->RelatedRead = NULL;
 				return;
 			}
-			switch (Data_Cache_Manager_Flash_Simple::caching_mode_per_input_stream[transaction->Stream_id])
+			switch (caching_mode_per_input_stream[transaction->Stream_id])
 			{
 				case Caching_Mode::TURNED_OFF:
 				case Caching_Mode::WRITE_CACHE:
 					transaction->UserIORequest->Transaction_list.remove(transaction);
-					if (_my_instance->is_user_request_finished(transaction->UserIORequest)) {
-						_my_instance->broadcast_user_request_serviced_signal(transaction->UserIORequest);
+					if (is_user_request_finished(transaction->UserIORequest)) {
+						broadcast_user_request_serviced_signal(transaction->UserIORequest);
 					}
 					break;
 				default:
 					PRINT_ERROR("The specified caching mode is not not support in simple cache manager!")
 			}
 		} else { //This is a write request
-			switch (Data_Cache_Manager_Flash_Simple::caching_mode_per_input_stream[transaction->Stream_id])
+			switch (caching_mode_per_input_stream[transaction->Stream_id])
 			{
 				case Caching_Mode::TURNED_OFF:
 					transaction->UserIORequest->Transaction_list.remove(transaction);
-					if (_my_instance->is_user_request_finished(transaction->UserIORequest)) {
-						_my_instance->broadcast_user_request_serviced_signal(transaction->UserIORequest);
+					if (is_user_request_finished(transaction->UserIORequest)) {
+						broadcast_user_request_serviced_signal(transaction->UserIORequest);
 					}
 					break;
 				case Caching_Mode::WRITE_CACHE:
 				{
-					((Data_Cache_Manager_Flash_Simple*)_my_instance)->back_pressure_buffer_depth -= transaction->Data_and_metadata_size_in_byte / SECTOR_SIZE_IN_BYTE + (transaction->Data_and_metadata_size_in_byte % SECTOR_SIZE_IN_BYTE == 0 ? 0 : 1);
+					back_pressure_buffer_depth -= transaction->Data_and_metadata_size_in_byte / SECTOR_SIZE_IN_BYTE + (transaction->Data_and_metadata_size_in_byte % SECTOR_SIZE_IN_BYTE == 0 ? 0 : 1);
 
-					if (((Data_Cache_Manager_Flash_Simple*)_my_instance)->data_cache->Exists(transaction->Stream_id, ((NVM_Transaction_Flash_WR*)transaction)->LPA)) {
-						Data_Cache_Slot_Type slot = ((Data_Cache_Manager_Flash_Simple*)_my_instance)->data_cache->Get_slot(transaction->Stream_id, ((NVM_Transaction_Flash_WR*)transaction)->LPA);
+					if (data_cache->Exists(transaction->Stream_id, ((NVM_Transaction_Flash_WR*)transaction)->LPA)) {
+						Data_Cache_Slot_Type slot = data_cache->Get_slot(transaction->Stream_id, ((NVM_Transaction_Flash_WR*)transaction)->LPA);
 						sim_time_type timestamp = slot.Timestamp;
 						NVM::memory_content_type content = slot.Content;
 						if (((NVM_Transaction_Flash_WR*)transaction)->DataTimeStamp >= timestamp) {
-							((Data_Cache_Manager_Flash_Simple*)_my_instance)->data_cache->Remove_slot(transaction->Stream_id, ((NVM_Transaction_Flash_WR*)transaction)->LPA);
+							data_cache->Remove_slot(transaction->Stream_id, ((NVM_Transaction_Flash_WR*)transaction)->LPA);
 						}
 					}
 
-					for (unsigned int i = 0; i < _my_instance->stream_count; i++) {
-						((Data_Cache_Manager_Flash_Simple*)_my_instance)->request_queue_turn++;
-						((Data_Cache_Manager_Flash_Simple*)_my_instance)->request_queue_turn %= ((Data_Cache_Manager_Flash_Simple*)_my_instance)->stream_count;
-						if (((Data_Cache_Manager_Flash_Simple*)_my_instance)->waiting_user_requests_queue_for_dram_free_slot[((Data_Cache_Manager_Flash_Simple*)_my_instance)->request_queue_turn].size() > 0) {
-							auto user_request = ((Data_Cache_Manager_Flash_Simple*)_my_instance)->waiting_user_requests_queue_for_dram_free_slot[((Data_Cache_Manager_Flash_Simple*)_my_instance)->request_queue_turn].begin();
-							((Data_Cache_Manager_Flash_Simple*)_my_instance)->write_to_destage_buffer(*user_request);
+					for (unsigned int i = 0; i < stream_count; i++) {
+						request_queue_turn++;
+						request_queue_turn %= stream_count;
+						if (waiting_user_requests_queue_for_dram_free_slot[request_queue_turn].size() > 0) {
+							auto user_request = waiting_user_requests_queue_for_dram_free_slot[request_queue_turn].begin();
+							write_to_destage_buffer(*user_request);
 							if ((*user_request)->Transaction_list.size() == 0) {
-								((Data_Cache_Manager_Flash_Simple*)_my_instance)->waiting_user_requests_queue_for_dram_free_slot[((Data_Cache_Manager_Flash_Simple*)_my_instance)->request_queue_turn].remove(*user_request);
+								waiting_user_requests_queue_for_dram_free_slot[request_queue_turn].remove(*user_request);
 							}
 							//The traffic load on the backend is high and the waiting requests cannot be serviced
-							if (((Data_Cache_Manager_Flash_Simple*)_my_instance)->back_pressure_buffer_depth >= ((Data_Cache_Manager_Flash_Simple*)_my_instance)->back_pressure_buffer_max_depth) {
+							if (back_pressure_buffer_depth >= back_pressure_buffer_max_depth) {
 								break;
 							}
 						}

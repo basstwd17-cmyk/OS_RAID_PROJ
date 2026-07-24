@@ -1,9 +1,10 @@
 #include "Execution_Parameter_Set.h"
 
+// Host_Parameter_Set과 Device_Parameter_Set을 멤버로 갖도록 변경
 
-Host_Parameter_Set Execution_Parameter_Set::Host_Configuration;
-Device_Parameter_Set Execution_Parameter_Set::SSD_Device_Configuration;
-
+Execution_Parameter_Set::Execution_Parameter_Set()
+{
+}
 
 void Execution_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 {

@@ -77,7 +77,9 @@ inline void Input_Stream_Manager_NVMe::Handle_new_arrived_request(User_Request *
 	{
 		((Input_Stream_NVMe *)input_streams[request->Stream_id])->Waiting_user_requests.push_back(request);
 		((Input_Stream_NVMe *)input_streams[request->Stream_id])->STAT_number_of_read_requests++;
-		segment_user_request(request);
+		if (host_interface->Is_segmentation_enabled()) {
+			segment_user_request(request);
+		}
 
 		((Host_Interface_NVMe *)host_interface)->broadcast_user_request_arrival_signal(request);
 	}
@@ -89,25 +91,47 @@ inline void Input_Stream_Manager_NVMe::Handle_new_arrived_request(User_Request *
 	}
 }
 
-inline void Input_Stream_Manager_NVMe::Handle_arrived_write_data(User_Request *request)
+inline void Input_Stream_Manager_NVMe::Handle_new_arrived_write_request(User_Request *request)
 {
-	segment_user_request(request);
+	((Input_Stream_NVMe *)input_streams[request->Stream_id])->Submission_head_informed_to_host++;
+	if (((Input_Stream_NVMe *)input_streams[request->Stream_id])->Submission_head_informed_to_host == ((Input_Stream_NVMe *)input_streams[request->Stream_id])->Submission_queue_size)
+	{ //Circular queue implementation
+		((Input_Stream_NVMe *)input_streams[request->Stream_id])->Submission_head_informed_to_host = 0;
+	}
+	((Input_Stream_NVMe *)input_streams[request->Stream_id])->Waiting_user_requests.push_back(request);
+	((Input_Stream_NVMe *)input_streams[request->Stream_id])->STAT_number_of_write_requests++;
+	if (host_interface->Is_segmentation_enabled()) {
+		segment_user_request(request);
+	}
 	((Host_Interface_NVMe *)host_interface)->broadcast_user_request_arrival_signal(request);
 }
 
-inline void Input_Stream_Manager_NVMe::Handle_serviced_request(User_Request *request)
+inline void Input_Stream_Manager_NVMe::Handle_arrived_write_data(User_Request *request)
 {
-	stream_id_type stream_id = request->Stream_id;
-	((Input_Stream_NVMe *)input_streams[request->Stream_id])->Waiting_user_requests.remove(request);
-	((Input_Stream_NVMe *)input_streams[stream_id])->On_the_fly_requests--;
-
-	DEBUG("** Host Interface: Request #" << request->ID << " from stream #" << request->Stream_id << " is finished")
-
-	//If this is a read request, then the read data should be written to host memory
-	if (request->Type == UserRequestType::READ)
-	{
-		((Host_Interface_NVMe *)host_interface)->request_fetch_unit->Send_read_data(request);
+	if (host_interface->Is_segmentation_enabled()) {
+		segment_user_request(request);
 	}
+	((Host_Interface_NVMe *)host_interface)->broadcast_user_request_arrival_signal(request);
+}
+
+	inline void Input_Stream_Manager_NVMe::Handle_serviced_request(User_Request *request)
+	{
+		stream_id_type stream_id = request->Stream_id;
+		((Input_Stream_NVMe *)input_streams[request->Stream_id])->Waiting_user_requests.remove(request);
+		((Input_Stream_NVMe *)input_streams[stream_id])->On_the_fly_requests--;
+
+		DEBUG("** Host Interface: Request #" << request->ID << " from stream #" << request->Stream_id << " is finished")
+
+		if (host_interface->Is_internal_submission()) {
+			DELETE_REQUEST_NVME(request);
+			return;
+		}
+
+		//If this is a read request, then the read data should be written to host memory
+		if (request->Type == UserRequestType::READ)
+		{
+			((Host_Interface_NVMe *)host_interface)->request_fetch_unit->Send_read_data(request);
+		}
 
 	//there are waiting requests in the submission queue but have not been fetched, due to Queue_fetch_size limit
 	if (((Input_Stream_NVMe *)input_streams[stream_id])->Submission_head != ((Input_Stream_NVMe *)input_streams[stream_id])->Submission_tail)

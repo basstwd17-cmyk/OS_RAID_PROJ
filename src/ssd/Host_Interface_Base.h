@@ -2,6 +2,7 @@
 #define HOST_INTERFACE_BASE_H
 
 #include <vector>
+#include <functional>
 #include "../sim/Sim_Object.h"
 #include "../sim/Sim_Reporter.h"
 #include "../host/PCIe_Switch.h"
@@ -23,7 +24,14 @@ namespace SSD_Components
 	delete (Submission_Queue_Entry*)REQ->IO_command_info; \
 	if(Simulator->Is_integrated_execution_mode())\
 		{if(REQ->Data != NULL) delete[] (char*)REQ->Data;} \
-	if(REQ->Transaction_list.size() != 0) PRINT_ERROR("Deleting an unhandled user requests in the host interface! MQSim thinks something is going wrong!")\
+	if(REQ->Transaction_list.size() != 0) { \
+		std::cerr << "ERROR: Deleting a User_Request with non-empty Transaction_list!" << std::endl; \
+		std::cerr << "       ID=" << REQ->ID \
+		          << " Stream_id=" << (int)REQ->Stream_id \
+		          << " Type=" << (REQ->Type == SSD_Components::UserRequestType::READ ? "READ" : "WRITE") \
+		          << " Pending_Transactions=" << REQ->Transaction_list.size() \
+		          << std::endl; \
+	} \
 	delete REQ;
 
 	class Data_Cache_Manager_Base;
@@ -51,6 +59,7 @@ namespace SSD_Components
 		Input_Stream_Manager_Base(Host_Interface_Base* host_interface);
 		virtual ~Input_Stream_Manager_Base();
 		virtual void Handle_new_arrived_request(User_Request* request) = 0;
+		virtual void Handle_new_arrived_write_request(User_Request* request) = 0;
 		virtual void Handle_arrived_write_data(User_Request* request) = 0;
 		virtual void Handle_serviced_request(User_Request* request) = 0;
 		void Update_transaction_statistics(NVM_Transaction* transaction);
@@ -104,11 +113,25 @@ namespace SSD_Components
 		void Setup_triggers();
 		void Validate_simulation_config();
 
-		typedef void(*UserRequestArrivedSignalHandlerType) (User_Request*);
-		void Connect_to_user_request_arrived_signal(UserRequestArrivedSignalHandlerType function)
+		typedef std::function<void(User_Request*)> UserRequestArrivedSignalHandlerType;
+		void Connect_to_user_request_arrived_signal(const UserRequestArrivedSignalHandlerType& function)
 		{
 			connected_user_request_arrived_signal_handlers.push_back(function);
 		}
+
+		void Submit_io_request(User_Request* request, bool data_ready)
+		{
+			if (data_ready && request->Type == UserRequestType::WRITE) {
+				input_stream_manager->Handle_new_arrived_write_request(request);
+			} else {
+				input_stream_manager->Handle_new_arrived_request(request);
+			}
+		}
+
+		void Set_internal_submission(bool enabled) { internal_submission = enabled; }
+		bool Is_internal_submission() const { return internal_submission; }
+		void Set_segmentation_enabled(bool enabled) { segmentation_enabled = enabled; }
+		bool Is_segmentation_enabled() const { return segmentation_enabled; }
 
 		void Consume_pcie_message(Host_Components::PCIe_Message* message)
 		{
@@ -131,10 +154,11 @@ namespace SSD_Components
 		HostInterface_Types type;
 		LHA_type max_logical_sector_address;
 		unsigned int sectors_per_page;
-		static Host_Interface_Base* _my_instance;
 		Input_Stream_Manager_Base* input_stream_manager;
 		Request_Fetch_Unit_Base* request_fetch_unit;
 		Data_Cache_Manager_Base* cache;
+		bool internal_submission = false;
+		bool segmentation_enabled = true;
 		std::vector<UserRequestArrivedSignalHandlerType> connected_user_request_arrived_signal_handlers;
 
 		void broadcast_user_request_arrival_signal(User_Request* user_request)
@@ -145,15 +169,6 @@ namespace SSD_Components
 			}
 		}
 
-		static void handle_user_request_serviced_signal_from_cache(User_Request* user_request)
-		{
-			_my_instance->input_stream_manager->Handle_serviced_request(user_request);
-		}
-
-		static void handle_user_memory_transaction_serviced_signal_from_cache(NVM_Transaction* transaction)
-		{
-			_my_instance->input_stream_manager->Update_transaction_statistics(transaction);
-		}
 	private:
 		Host_Components::PCIe_Switch* pcie_switch;
 	};

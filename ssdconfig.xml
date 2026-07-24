@@ -46,6 +46,11 @@
 		<Channel_Transfer_Rate>333</Channel_Transfer_Rate>
 		<Chip_No_Per_Channel>2</Chip_No_Per_Channel>
 		<Flash_Comm_Protocol>NVDDR2</Flash_Comm_Protocol>
+		
+		// RAID 설정 제어를 위해 태그 추가
+		<SSD_Count>8</SSD_Count>
+		<Stripe_Unit_LBA>4</Stripe_Unit_LBA>
+
 		<Flash_Parameter_Set>
 			<Flash_Technology>MLC</Flash_Technology>
 			<CMD_Suspension_Support>ERASE</CMD_Suspension_Support>

@@ -56,7 +56,7 @@ Host_IO_Request *IO_Flow_Trace_Based::Generate_next_request()
 		request->Start_LBA = start_lsa_on_device + request->Start_LBA % (end_lsa_on_device - start_lsa_on_device);
 	}
 
-	request->Arrival_time = time_offset + Simulator->Time();
+	request->Arrival_time = Simulator->Time();
 	STAT_generated_request_count++;
 
 	return request;
@@ -163,8 +163,9 @@ void IO_Flow_Trace_Based::Execute_simulator_event(MQSimEngine::Sim_Event *)
 	}
 }
 
-void IO_Flow_Trace_Based::Get_statistics(Utils::Workload_Statistics &stats, LPA_type (*Convert_host_logical_address_to_device_address)(LHA_type lha),
-										 page_status_type (*Find_NVM_subunit_access_bitmap)(LHA_type lha))
+	void IO_Flow_Trace_Based::Get_statistics(Utils::Workload_Statistics &stats,
+										 const std::function<LPA_type(LHA_type lha)>& Convert_host_logical_address_to_device_address,
+										 const std::function<page_status_type(LHA_type lha)>& Find_NVM_subunit_access_bitmap)
 {
 	stats.Type = Utils::Workload_Type::TRACE_BASED;
 	stats.Stream_id = io_queue_id - 1; //In MQSim, there is a simple relation between stream id and the io_queue_id of NVMe

@@ -1,47 +1,49 @@
 #include "Device_Parameter_Set.h"
 #include <algorithm>
-
-
-
-int Device_Parameter_Set::Seed = 123;//Seed for random number generation (used in device's random number generators)
-bool Device_Parameter_Set::Enabled_Preconditioning = true;
-NVM::NVM_Type Device_Parameter_Set::Memory_Type = NVM::NVM_Type::FLASH;
-HostInterface_Types Device_Parameter_Set::HostInterface_Type = HostInterface_Types::NVME;
-uint16_t Device_Parameter_Set::IO_Queue_Depth = 1024;//For NVMe, it determines the size of the submission/completion queues; for SATA, it determines the size of NCQ_Control_Structure
-uint16_t Device_Parameter_Set::Queue_Fetch_Size = 512;//Used in NVMe host interface
-SSD_Components::Caching_Mechanism Device_Parameter_Set::Caching_Mechanism = SSD_Components::Caching_Mechanism::ADVANCED;
-SSD_Components::Cache_Sharing_Mode Device_Parameter_Set::Data_Cache_Sharing_Mode = SSD_Components::Cache_Sharing_Mode::SHARED;//Data cache sharing among concurrently running I/O flows, if NVMe host interface is used
-unsigned int Device_Parameter_Set::Data_Cache_Capacity = 1024 * 1024 * 512;//Data cache capacity in bytes
-unsigned int Device_Parameter_Set::Data_Cache_DRAM_Row_Size = 8192;//The row size of DRAM in the data cache, the unit is bytes
-unsigned int Device_Parameter_Set::Data_Cache_DRAM_Data_Rate = 800;//Data access rate to access DRAM in the data cache, the unit is MT/s
-unsigned int Device_Parameter_Set::Data_Cache_DRAM_Data_Busrt_Size = 4;//The number of bytes that are transferred in one burst (it depends on the number of DRAM chips)
-sim_time_type Device_Parameter_Set::Data_Cache_DRAM_tRCD = 13;//tRCD parameter to access DRAM in the data cache, the unit is nano-seconds
-sim_time_type Device_Parameter_Set::Data_Cache_DRAM_tCL = 13;//tCL parameter to access DRAM in the data cache, the unit is nano-seconds
-sim_time_type Device_Parameter_Set::Data_Cache_DRAM_tRP = 13;//tRP parameter to access DRAM in the data cache, the unit is nano-seconds
-SSD_Components::Flash_Address_Mapping_Type Device_Parameter_Set::Address_Mapping = SSD_Components::Flash_Address_Mapping_Type::PAGE_LEVEL;
-bool Device_Parameter_Set::Ideal_Mapping_Table = false;//If mapping is ideal, then all the mapping entries are found in the DRAM and there is no need to read mapping entries from flash
-unsigned int Device_Parameter_Set::CMT_Capacity = 2 * 1024 * 1024;//Size of SRAM/DRAM space that is used to cache address mapping table in bytes
-SSD_Components::CMT_Sharing_Mode Device_Parameter_Set::CMT_Sharing_Mode = SSD_Components::CMT_Sharing_Mode::SHARED;//How the entire CMT space is shared among concurrently running flows
-SSD_Components::Flash_Plane_Allocation_Scheme_Type Device_Parameter_Set::Plane_Allocation_Scheme = SSD_Components::Flash_Plane_Allocation_Scheme_Type::CWDP;
-SSD_Components::Flash_Scheduling_Type Device_Parameter_Set::Transaction_Scheduling_Policy = SSD_Components::Flash_Scheduling_Type::OUT_OF_ORDER;
-double Device_Parameter_Set::Overprovisioning_Ratio = 0.07;//The ratio of spare space with respect to the whole available storage space of SSD
-double Device_Parameter_Set::GC_Exec_Threshold = 0.05;//The threshold for the ratio of free pages that used to trigger GC
-SSD_Components::GC_Block_Selection_Policy_Type Device_Parameter_Set::GC_Block_Selection_Policy = SSD_Components::GC_Block_Selection_Policy_Type::RGA;
-bool Device_Parameter_Set::Use_Copyback_for_GC = false;
-bool Device_Parameter_Set::Preemptible_GC_Enabled = true;
-double Device_Parameter_Set::GC_Hard_Threshold = 0.005;//The hard gc execution threshold, used to stop preemptible gc execution
-bool Device_Parameter_Set::Dynamic_Wearleveling_Enabled = true;
-bool Device_Parameter_Set::Static_Wearleveling_Enabled = true;
-unsigned int Device_Parameter_Set::Static_Wearleveling_Threshold = 100;
-sim_time_type Device_Parameter_Set::Preferred_suspend_erase_time_for_read = 700000;//in nano-seconds
-sim_time_type Device_Parameter_Set::Preferred_suspend_erase_time_for_write = 700000;//in nano-seconds
-sim_time_type Device_Parameter_Set::Preferred_suspend_write_time_for_read = 100000;//in nano-seconds
-unsigned int Device_Parameter_Set::Flash_Channel_Count = 8;
-unsigned int Device_Parameter_Set::Flash_Channel_Width = 1;//Channel width in byte
-unsigned int Device_Parameter_Set::Channel_Transfer_Rate = 300;//MT/s
-unsigned int Device_Parameter_Set::Chip_No_Per_Channel = 4;
-SSD_Components::ONFI_Protocol Device_Parameter_Set::Flash_Comm_Protocol = SSD_Components::ONFI_Protocol::NVDDR2;
-Flash_Parameter_Set Device_Parameter_Set::Flash_Parameters;
+Device_Parameter_Set::Device_Parameter_Set()
+	: Seed(123),
+	  Enabled_Preconditioning(true),
+	  Memory_Type(NVM::NVM_Type::FLASH),
+	  HostInterface_Type(HostInterface_Types::NVME),
+	  IO_Queue_Depth(1024),
+	  Queue_Fetch_Size(512),
+	  Caching_Mechanism(SSD_Components::Caching_Mechanism::ADVANCED),
+	  Data_Cache_Sharing_Mode(SSD_Components::Cache_Sharing_Mode::SHARED),
+	  Data_Cache_Capacity(1024 * 1024 * 512),
+	  Data_Cache_DRAM_Row_Size(8192),
+	  Data_Cache_DRAM_Data_Rate(800),
+	  Data_Cache_DRAM_Data_Busrt_Size(4),
+	  Data_Cache_DRAM_tRCD(13),
+	  Data_Cache_DRAM_tCL(13),
+	  Data_Cache_DRAM_tRP(13),
+	  Address_Mapping(SSD_Components::Flash_Address_Mapping_Type::PAGE_LEVEL),
+	  Ideal_Mapping_Table(false),
+	  CMT_Capacity(2 * 1024 * 1024),
+	  CMT_Sharing_Mode(SSD_Components::CMT_Sharing_Mode::SHARED),
+	  Plane_Allocation_Scheme(SSD_Components::Flash_Plane_Allocation_Scheme_Type::CWDP),
+	  Transaction_Scheduling_Policy(SSD_Components::Flash_Scheduling_Type::OUT_OF_ORDER),
+	  Overprovisioning_Ratio(0.07),
+	  GC_Exec_Threshold(0.05),
+	  GC_Block_Selection_Policy(SSD_Components::GC_Block_Selection_Policy_Type::RGA),
+	  Use_Copyback_for_GC(false),
+	  Preemptible_GC_Enabled(true),
+	  GC_Hard_Threshold(0.005),
+	  Dynamic_Wearleveling_Enabled(true),
+	  Static_Wearleveling_Enabled(true),
+	  Static_Wearleveling_Threshold(100),
+	  Preferred_suspend_erase_time_for_read(700000),
+	  Preferred_suspend_erase_time_for_write(700000),
+	  Preferred_suspend_write_time_for_read(100000),
+	  Flash_Channel_Count(8),
+	  Flash_Channel_Width(1),
+	  Channel_Transfer_Rate(300),
+	  Chip_No_Per_Channel(4),
+	  Flash_Comm_Protocol(SSD_Components::ONFI_Protocol::NVDDR2),
+	  SSD_Count(1),
+	  Stripe_Unit_LBA(8)
+{
+}
+// static -> 파라미터 멤버화
 
 void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 {
@@ -159,7 +161,7 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 	xmlwriter.Write_attribute_string(attr, val);
 
 	attr = "Ideal_Mapping_Table";
-	val = (Use_Copyback_for_GC ? "true" : "false");
+	val = (Ideal_Mapping_Table ? "true" : "false");
 	xmlwriter.Write_attribute_string(attr, val);
 	
 	attr = "CMT_Capacity";
@@ -368,6 +370,15 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 			break;
 	}
 	xmlwriter.Write_attribute_string(attr, val);
+
+	// RAID 파라미터 추가
+	attr = "SSD_Count";
+	val = std::to_string(SSD_Count);
+	xmlwriter.Write_attribute_string(attr, val);     // SSD 개수
+
+	attr = "Stripe_Unit_LBA";
+	val = std::to_string(Stripe_Unit_LBA);
+	xmlwriter.Write_attribute_string(attr, val);     // 스트라이프 유닛 크기
 
 	Flash_Parameters.XML_serialize(xmlwriter);
 
@@ -625,6 +636,13 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 				} else {
 					PRINT_ERROR("Unknown flash communication protocol type specified in the SSD configuration file")
 				}
+			// RAID 파라미터 변수 반영 추가
+			} else if (strcmp(param->name(), "SSD_Count") == 0) {
+				std::string val = param->value();
+				SSD_Count = std::stoul(val);
+			} else if (strcmp(param->name(), "Stripe_Unit_LBA") == 0) {
+				std::string val = param->value();
+				Stripe_Unit_LBA = std::stoul(val);
 			}
 			else if (strcmp(param->name(), "Flash_Parameter_Set") == 0)
 			{

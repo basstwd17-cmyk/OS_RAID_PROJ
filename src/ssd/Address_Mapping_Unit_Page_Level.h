@@ -164,11 +164,10 @@ namespace SSD_Components
 		void Set_barrier_for_accessing_physical_block(const NVM::FlashMemory::Physical_Page_Address& block_address);
 		void Set_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa);
 		void Set_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mpvn);
-		void Remove_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa);
-		void Remove_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mpvn);
-		void Start_servicing_writes_for_overfull_plane(const NVM::FlashMemory::Physical_Page_Address plane_address);
+	void Remove_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa);
+	void Remove_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mpvn);
+	void Start_servicing_writes_for_overfull_plane(const NVM::FlashMemory::Physical_Page_Address plane_address);
 	private:
-		static Address_Mapping_Unit_Page_Level* _my_instance;
 		unsigned int cmt_capacity;
 		AddressMappingDomain** domains;
 		unsigned int CMT_entry_size, GTD_entry_size;//In CMT MQSim stores (lpn, ppn, page status bits) but in GTD it only stores (ppn, page status bits)
@@ -178,7 +177,7 @@ namespace SSD_Components
 		void allocate_page_in_plane_for_translation_write(NVM_Transaction_Flash* transaction, MVPN_type mvpn, bool is_for_gc);
 		void allocate_plane_for_preconditioning(stream_id_type stream_id, LPA_type lpn, NVM::FlashMemory::Physical_Page_Address& targetAddress);
 		bool request_mapping_entry(const stream_id_type streamID, const LPA_type lpn);
-		static void handle_transaction_serviced_signal_from_PHY(NVM_Transaction_Flash* transaction);
+		void handle_transaction_serviced_signal_from_PHY(NVM_Transaction_Flash* transaction);
 		bool translate_lpa_to_ppa(stream_id_type streamID, NVM_Transaction_Flash* transaction);
 		std::set<NVM_Transaction_Flash_WR*>**** Write_transactions_for_overfull_planes;
 

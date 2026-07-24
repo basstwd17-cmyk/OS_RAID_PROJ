@@ -57,24 +57,42 @@ namespace SSD_Components
 		if (((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->Submission_head_informed_to_host == ncq_depth) {
 			((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->Submission_head_informed_to_host = 0;
 		}
-		if (request->Type == UserRequestType::READ) {
-			((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->Waiting_user_requests.push_back(request);
-			((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->STAT_number_of_read_requests++;
+	if (request->Type == UserRequestType::READ) {
+		((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->Waiting_user_requests.push_back(request);
+		((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->STAT_number_of_read_requests++;
+		if (host_interface->Is_segmentation_enabled()) {
 			segment_user_request(request);
+		}
 
-			((Host_Interface_SATA*)host_interface)->broadcast_user_request_arrival_signal(request);
-		} else {//This is a write request
+		((Host_Interface_SATA*)host_interface)->broadcast_user_request_arrival_signal(request);
+	} else {//This is a write request
 			((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->Waiting_user_requests.push_back(request);
 			((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->STAT_number_of_write_requests++;
 			((Host_Interface_SATA*)host_interface)->request_fetch_unit->Fetch_write_data(request);
 		}
 	}
 
-	inline void Input_Stream_Manager_SATA::Handle_arrived_write_data(User_Request* request)
+	inline void Input_Stream_Manager_SATA::Handle_new_arrived_write_request(User_Request* request)
 	{
+		((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->Submission_head_informed_to_host++;
+		if (((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->Submission_head_informed_to_host == ncq_depth) {
+			((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->Submission_head_informed_to_host = 0;
+		}
+	((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->Waiting_user_requests.push_back(request);
+	((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->STAT_number_of_write_requests++;
+	if (host_interface->Is_segmentation_enabled()) {
 		segment_user_request(request);
-		((Host_Interface_SATA*)host_interface)->broadcast_user_request_arrival_signal(request);
 	}
+	((Host_Interface_SATA*)host_interface)->broadcast_user_request_arrival_signal(request);
+}
+
+inline void Input_Stream_Manager_SATA::Handle_arrived_write_data(User_Request* request)
+{
+	if (host_interface->Is_segmentation_enabled()) {
+		segment_user_request(request);
+	}
+	((Host_Interface_SATA*)host_interface)->broadcast_user_request_arrival_signal(request);
+}
 
 	inline void Input_Stream_Manager_SATA::Handle_serviced_request(User_Request* request)
 	{
@@ -82,6 +100,11 @@ namespace SSD_Components
 		((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->On_the_fly_requests--;
 
 		DEBUG("** Host Interface: Request #" << request->ID << " is finished")
+
+		if (host_interface->Is_internal_submission()) {
+			DELETE_REQUEST_NVME(request);
+			return;
+		}
 
 		//If this is a read request, then the read data should be written to host memory
 		if (request->Type == UserRequestType::READ) {

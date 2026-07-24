@@ -288,7 +288,6 @@ namespace SSD_Components
 		}
 	}
 
-	Address_Mapping_Unit_Page_Level* Address_Mapping_Unit_Page_Level::_my_instance = NULL;
 	Address_Mapping_Unit_Page_Level::Address_Mapping_Unit_Page_Level(const sim_object_id_type& id, FTL* ftl, NVM_PHY_ONFI* flash_controller, Flash_Block_Manager_Base* block_manager,
 		bool ideal_mapping_table, unsigned int cmt_capacity_in_byte, Flash_Plane_Allocation_Scheme_Type PlaneAllocationScheme,
 		unsigned int concurrent_stream_no,
@@ -301,7 +300,6 @@ namespace SSD_Components
 			concurrent_stream_no, channel_count, chip_no_per_channel, die_no_per_chip, plane_no_per_die,
 			Block_no_per_plane, Page_no_per_block, SectorsPerPage, PageSizeInByte, Overprovisioning_ratio, sharing_mode, fold_large_addresses)
 	{
-		_my_instance = this;
 		domains = new AddressMappingDomain*[no_of_input_streams];
 
 		Write_transactions_for_overfull_planes = new std::set<NVM_Transaction_Flash_WR*>***[channel_count];
@@ -404,7 +402,9 @@ namespace SSD_Components
 	void Address_Mapping_Unit_Page_Level::Setup_triggers()
 	{
 		Sim_Object::Setup_triggers();
-		flash_controller->ConnectToTransactionServicedSignal(handle_transaction_serviced_signal_from_PHY);
+		flash_controller->ConnectToTransactionServicedSignal([this](NVM_Transaction_Flash* transaction) {
+			this->handle_transaction_serviced_signal_from_PHY(transaction);
+		});
 	}
 
 	void Address_Mapping_Unit_Page_Level::Start_simulation()
@@ -1669,12 +1669,12 @@ namespace SSD_Components
 			return;
 		}
 
-		if (_my_instance->ideal_mapping_table){
+		if (ideal_mapping_table){
 			throw std::logic_error("There should not be any flash read/write when ideal mapping is enabled!");
 		}
 
 		if (transaction->Type == Transaction_Type::WRITE) {
-			_my_instance->domains[transaction->Stream_id]->DepartingMappingEntries.erase((MVPN_type)((NVM_Transaction_Flash_WR*)transaction)->Content);
+			domains[transaction->Stream_id]->DepartingMappingEntries.erase((MVPN_type)((NVM_Transaction_Flash_WR*)transaction)->Content);
 		} else {
 			/*If this is a read for an MVP that is required for merging unchanged mapping enries
 			* (stored on flash) with those updated entries that are evicted from CMT*/
@@ -1682,58 +1682,58 @@ namespace SSD_Components
 				((NVM_Transaction_Flash_RD*)transaction)->RelatedWrite->RelatedRead = NULL;
 			}
 
-			_my_instance->ftl->TSU->Prepare_for_transaction_submit();
+			ftl->TSU->Prepare_for_transaction_submit();
 			MVPN_type mvpn = (MVPN_type)((NVM_Transaction_Flash_RD*)transaction)->Content;
-			std::multimap<MVPN_type, LPA_type>::iterator it = _my_instance->domains[transaction->Stream_id]->ArrivingMappingEntries.find(mvpn);
-			while (it != _my_instance->domains[transaction->Stream_id]->ArrivingMappingEntries.end()) {
+			std::multimap<MVPN_type, LPA_type>::iterator it = domains[transaction->Stream_id]->ArrivingMappingEntries.find(mvpn);
+			while (it != domains[transaction->Stream_id]->ArrivingMappingEntries.end()) {
 				if ((*it).first == mvpn) {
 					LPA_type lpa = (*it).second;
 
 					//This mapping entry may arrived due to an update read request that is required for merging new and old mapping entries.
 					//If that is the case, we should not insert it into CMT
-					if (_my_instance->domains[transaction->Stream_id]->CMT->Is_slot_reserved_for_lpn_and_waiting(transaction->Stream_id, lpa)) {
-						_my_instance->domains[transaction->Stream_id]->CMT->Insert_new_mapping_info(transaction->Stream_id, lpa,
-							_my_instance->domains[transaction->Stream_id]->GlobalMappingTable[lpa].PPA,
-							_my_instance->domains[transaction->Stream_id]->GlobalMappingTable[lpa].WrittenStateBitmap);
-						auto it2 = _my_instance->domains[transaction->Stream_id]->Waiting_unmapped_read_transactions.find(lpa);
-						while (it2 != _my_instance->domains[transaction->Stream_id]->Waiting_unmapped_read_transactions.end() &&
+					if (domains[transaction->Stream_id]->CMT->Is_slot_reserved_for_lpn_and_waiting(transaction->Stream_id, lpa)) {
+						domains[transaction->Stream_id]->CMT->Insert_new_mapping_info(transaction->Stream_id, lpa,
+							domains[transaction->Stream_id]->GlobalMappingTable[lpa].PPA,
+							domains[transaction->Stream_id]->GlobalMappingTable[lpa].WrittenStateBitmap);
+						auto it2 = domains[transaction->Stream_id]->Waiting_unmapped_read_transactions.find(lpa);
+						while (it2 != domains[transaction->Stream_id]->Waiting_unmapped_read_transactions.end() &&
 							(*it2).first == lpa) {
-							if (_my_instance->is_lpa_locked_for_gc(transaction->Stream_id, lpa)) {
-								_my_instance->manage_user_transaction_facing_barrier(it2->second);
+							if (is_lpa_locked_for_gc(transaction->Stream_id, lpa)) {
+								manage_user_transaction_facing_barrier(it2->second);
 							} else {
-								if (_my_instance->translate_lpa_to_ppa(transaction->Stream_id, it2->second)) {
-									_my_instance->ftl->TSU->Submit_transaction(it2->second);
+								if (translate_lpa_to_ppa(transaction->Stream_id, it2->second)) {
+									ftl->TSU->Submit_transaction(it2->second);
 								}
 								else {
-									_my_instance->mange_unsuccessful_translation(it2->second);
+									mange_unsuccessful_translation(it2->second);
 								}
 							}
-							_my_instance->domains[transaction->Stream_id]->Waiting_unmapped_read_transactions.erase(it2++);
+							domains[transaction->Stream_id]->Waiting_unmapped_read_transactions.erase(it2++);
 						}
-						it2 = _my_instance->domains[transaction->Stream_id]->Waiting_unmapped_program_transactions.find(lpa);
-						while (it2 != _my_instance->domains[transaction->Stream_id]->Waiting_unmapped_program_transactions.end() &&
+						it2 = domains[transaction->Stream_id]->Waiting_unmapped_program_transactions.find(lpa);
+						while (it2 != domains[transaction->Stream_id]->Waiting_unmapped_program_transactions.end() &&
 							(*it2).first == lpa) {
-							if (_my_instance->is_lpa_locked_for_gc(transaction->Stream_id, lpa)) {
-								_my_instance->manage_user_transaction_facing_barrier(it2->second);
+							if (is_lpa_locked_for_gc(transaction->Stream_id, lpa)) {
+								manage_user_transaction_facing_barrier(it2->second);
 							} else {
-								if (_my_instance->translate_lpa_to_ppa(transaction->Stream_id, it2->second)) {
-									_my_instance->ftl->TSU->Submit_transaction(it2->second);
+								if (translate_lpa_to_ppa(transaction->Stream_id, it2->second)) {
+									ftl->TSU->Submit_transaction(it2->second);
 									if (((NVM_Transaction_Flash_WR*)it2->second)->RelatedRead != NULL) {
-										_my_instance->ftl->TSU->Submit_transaction(((NVM_Transaction_Flash_WR*)it2->second)->RelatedRead);
+										ftl->TSU->Submit_transaction(((NVM_Transaction_Flash_WR*)it2->second)->RelatedRead);
 									}
 								} else {
-									_my_instance->mange_unsuccessful_translation(it2->second);
+									mange_unsuccessful_translation(it2->second);
 								}
 							}
-							_my_instance->domains[transaction->Stream_id]->Waiting_unmapped_program_transactions.erase(it2++);
+							domains[transaction->Stream_id]->Waiting_unmapped_program_transactions.erase(it2++);
 						}
 					}
 				} else {
 					break;
 				}
-				_my_instance->domains[transaction->Stream_id]->ArrivingMappingEntries.erase(it++);
+				domains[transaction->Stream_id]->ArrivingMappingEntries.erase(it++);
 			}
-			_my_instance->ftl->TSU->Schedule();
+			ftl->TSU->Schedule();
 		}
 	}
 

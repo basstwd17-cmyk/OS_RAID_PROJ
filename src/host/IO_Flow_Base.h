@@ -7,6 +7,7 @@
 #include <set>
 #include <list>
 #include <vector>
+#include <functional>
 #include "../sim/Sim_Defs.h"
 #include "../sim/Sim_Object.h"
 #include "../sim/Sim_Reporter.h"
@@ -65,12 +66,10 @@ namespace Host_Components
 		uint32_t Get_end_to_end_request_delay();//in microseconds
 		uint32_t Get_min_end_to_end_request_delay();//in microseconds
 		uint32_t Get_max_end_to_end_request_delay();//in microseconds
-		uint64_t Get_transferred_bytes_total() const;
-		uint64_t Get_transferred_bytes_read() const;
-		uint64_t Get_transferred_bytes_write() const;
 		void Report_results_in_XML(std::string name_prefix, Utils::XmlWriter& xmlwriter);
-		virtual void Get_statistics(Utils::Workload_Statistics& stats, LPA_type(*Convert_host_logical_address_to_device_address)(LHA_type lha),
-			page_status_type(*Find_NVM_subunit_access_bitmap)(LHA_type lha)) = 0;
+		virtual void Get_statistics(Utils::Workload_Statistics& stats,
+			const std::function<LPA_type(LHA_type lha)>& Convert_host_logical_address_to_device_address,
+			const std::function<page_status_type(LHA_type lha)>& Find_NVM_subunit_access_bitmap) = 0;
 	protected:
 		uint16_t flow_id;
 		double initial_occupancy_ratio;//The initial amount of valid logical pages when pereconditioning is performed

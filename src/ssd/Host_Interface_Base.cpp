@@ -28,14 +28,11 @@ namespace SSD_Components
 		}
 	}
 
-	Host_Interface_Base* Host_Interface_Base::_my_instance = NULL;
-
 	Host_Interface_Base::Host_Interface_Base(const sim_object_id_type& id, HostInterface_Types type, LHA_type max_logical_sector_address, unsigned int sectors_per_page, 
 		Data_Cache_Manager_Base* cache)
 		: MQSimEngine::Sim_Object(id), type(type), max_logical_sector_address(max_logical_sector_address), 
 		sectors_per_page(sectors_per_page), cache(cache)
 	{
-		_my_instance = this;
 	}
 	
 	Host_Interface_Base::~Host_Interface_Base()
@@ -47,8 +44,12 @@ namespace SSD_Components
 	void Host_Interface_Base::Setup_triggers()
 	{
 		Sim_Object::Setup_triggers();
-		cache->Connect_to_user_request_serviced_signal(handle_user_request_serviced_signal_from_cache);
-		cache->Connect_to_user_memory_transaction_serviced_signal(handle_user_memory_transaction_serviced_signal_from_cache);
+		cache->Connect_to_user_request_serviced_signal([this](User_Request* user_request) {
+			this->input_stream_manager->Handle_serviced_request(user_request);
+		});
+		cache->Connect_to_user_memory_transaction_serviced_signal([this](NVM_Transaction* transaction) {
+			this->input_stream_manager->Update_transaction_statistics(transaction);
+		});
 	}
 
 	void Host_Interface_Base::Validate_simulation_config()
@@ -57,6 +58,9 @@ namespace SSD_Components
 
 	void Host_Interface_Base::Send_read_message_to_host(uint64_t addresss, unsigned int request_read_data_size)
 	{
+		if (internal_submission || pcie_switch == NULL) {
+			return;
+		}
 		Host_Components::PCIe_Message* pcie_message = new Host_Components::PCIe_Message;
 		pcie_message->Type = Host_Components::PCIe_Message_Type::READ_REQ;
 		pcie_message->Destination = Host_Components::PCIe_Destination_Type::HOST;
@@ -68,6 +72,9 @@ namespace SSD_Components
 
 	void Host_Interface_Base::Send_write_message_to_host(uint64_t addresss, void* message, unsigned int message_size)
 	{
+		if (internal_submission || pcie_switch == NULL) {
+			return;
+		}
 		Host_Components::PCIe_Message* pcie_message = new Host_Components::PCIe_Message;
 		pcie_message->Type = Host_Components::PCIe_Message_Type::WRITE_REQ;
 		pcie_message->Destination = Host_Components::PCIe_Destination_Type::HOST;

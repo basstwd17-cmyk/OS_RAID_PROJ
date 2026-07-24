@@ -5,8 +5,6 @@
 
 namespace SSD_Components
 {
-	TSU_Base* TSU_Base::_my_instance = NULL;
-
 	TSU_Base::TSU_Base(const sim_object_id_type& id, FTL* ftl, NVM_PHY_ONFI_NVDDR2* NVMController, Flash_Scheduling_Type Type,
 		unsigned int ChannelCount, unsigned int chip_no_per_channel, unsigned int DieNoPerChip, unsigned int PlaneNoPerDie,
 		bool EraseSuspensionEnabled, bool ProgramSuspensionEnabled,
@@ -19,7 +17,6 @@ namespace SSD_Components
 		writeReasonableSuspensionTimeForRead(WriteReasonableSuspensionTimeForRead), eraseReasonableSuspensionTimeForRead(EraseReasonableSuspensionTimeForRead),
 		eraseReasonableSuspensionTimeForWrite(EraseReasonableSuspensionTimeForWrite), opened_scheduling_reqs(0)
 	{
-		_my_instance = this;
 		Round_robin_turn_of_channel = new flash_chip_ID_type[channel_count];
 		for (unsigned int channelID = 0; channelID < channel_count; channelID++) {
 			Round_robin_turn_of_channel[channelID] = 0;
@@ -34,9 +31,15 @@ namespace SSD_Components
 	void TSU_Base::Setup_triggers()
 	{
 		Sim_Object::Setup_triggers();
-		_NVMController->ConnectToTransactionServicedSignal(handle_transaction_serviced_signal_from_PHY);
-		_NVMController->ConnectToChannelIdleSignal(handle_channel_idle_signal);
-		_NVMController->ConnectToChipIdleSignal(handle_chip_idle_signal);
+		_NVMController->ConnectToTransactionServicedSignal([this](NVM_Transaction_Flash* transaction) {
+			this->handle_transaction_serviced_signal_from_PHY(transaction);
+		});
+		_NVMController->ConnectToChannelIdleSignal([this](flash_channel_ID_type channel_id) {
+			this->handle_channel_idle_signal(channel_id);
+		});
+		_NVMController->ConnectToChipIdleSignal([this](NVM::FlashMemory::Flash_Chip* chip) {
+			this->handle_chip_idle_signal(chip);
+		});
 	}
 
 	void TSU_Base::handle_transaction_serviced_signal_from_PHY(NVM_Transaction_Flash* transaction)
@@ -46,13 +49,13 @@ namespace SSD_Components
 
 	void TSU_Base::handle_channel_idle_signal(flash_channel_ID_type channelID)
 	{
-		for (unsigned int i = 0; i < _my_instance->chip_no_per_channel; i++) {
+		for (unsigned int i = 0; i < chip_no_per_channel; i++) {
 			//The TSU does not check if the chip is idle or not since it is possible to suspend a busy chip and issue a new command
-			_my_instance->process_chip_requests(_my_instance->_NVMController->Get_chip(channelID, _my_instance->Round_robin_turn_of_channel[channelID]));
-			_my_instance->Round_robin_turn_of_channel[channelID] = (flash_chip_ID_type)(_my_instance->Round_robin_turn_of_channel[channelID] + 1) % _my_instance->chip_no_per_channel;
+			process_chip_requests(_NVMController->Get_chip(channelID, Round_robin_turn_of_channel[channelID]));
+			Round_robin_turn_of_channel[channelID] = (flash_chip_ID_type)(Round_robin_turn_of_channel[channelID] + 1) % chip_no_per_channel;
 
 			//A transaction has been started, so TSU should stop searching for another chip
-			if (_my_instance->_NVMController->Get_channel_status(channelID) == BusChannelStatus::BUSY) {
+			if (_NVMController->Get_channel_status(channelID) == BusChannelStatus::BUSY) {
 				break;
 			}
 		}
@@ -60,8 +63,8 @@ namespace SSD_Components
 	
 	void TSU_Base::handle_chip_idle_signal(NVM::FlashMemory::Flash_Chip* chip)
 	{
-		if (_my_instance->_NVMController->Get_channel_status(chip->ChannelID) == BusChannelStatus::IDLE) {
-			_my_instance->process_chip_requests(chip);
+		if (_NVMController->Get_channel_status(chip->ChannelID) == BusChannelStatus::IDLE) {
+			process_chip_requests(chip);
 		}
 	}
 

@@ -2,6 +2,7 @@
 #define NVM_PHY_ONFI_ONFI_H
 
 #include <vector>
+#include <functional>
 #include "../nvm_chip/flash_memory/Flash_Command.h"
 #include "../nvm_chip/flash_memory/Flash_Chip.h"
 #include "NVM_Transaction_Flash.h"
@@ -35,11 +36,11 @@ namespace SSD_Components
 		virtual void Send_command_to_chip(std::list<NVM_Transaction_Flash*>& transactionList) = 0;
 		virtual void Change_flash_page_status_for_preconditioning(const NVM::FlashMemory::Physical_Page_Address& page_address, const LPA_type lpa) = 0;
 
-		typedef void(*TransactionServicedHandlerType) (NVM_Transaction_Flash*);
+		typedef std::function<void(NVM_Transaction_Flash*)> TransactionServicedHandlerType;
 		void ConnectToTransactionServicedSignal(TransactionServicedHandlerType);
-		typedef void(*ChannelIdleHandlerType) (flash_channel_ID_type);
+		typedef std::function<void(flash_channel_ID_type)> ChannelIdleHandlerType;
 		void ConnectToChannelIdleSignal(ChannelIdleHandlerType);
-		typedef void(*ChipIdleHandlerType) (NVM::FlashMemory::Flash_Chip*);
+		typedef std::function<void(NVM::FlashMemory::Flash_Chip*)> ChipIdleHandlerType;
 		void ConnectToChipIdleSignal(ChipIdleHandlerType);
 	protected:
 		unsigned int channel_count;

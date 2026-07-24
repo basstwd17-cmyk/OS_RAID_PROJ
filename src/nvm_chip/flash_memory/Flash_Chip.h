@@ -10,6 +10,7 @@
 #include "Die.h"
 #include "Flash_Command.h"
 #include <vector>
+#include <functional>
 #include <stdexcept>
 
 namespace NVM
@@ -79,8 +80,8 @@ namespace NVM
 			void Validate_simulation_config();
 			void Setup_triggers();
 			void Execute_simulator_event(MQSimEngine::Sim_Event*);
-			typedef void(*ChipReadySignalHandlerType) (Flash_Chip* targetChip, Flash_Command* command);
-			void Connect_to_chip_ready_signal(ChipReadySignalHandlerType);
+			typedef std::function<void(Flash_Chip* targetChip, Flash_Command* command)> ChipReadySignalHandlerType;
+			void Connect_to_chip_ready_signal(const ChipReadySignalHandlerType&);
 			
 			sim_time_type Get_command_execution_latency(command_code_type CMDCode, flash_page_ID_type pageID)
 			{
@@ -112,14 +113,32 @@ namespace NVM
 				}
 			}
 
-			void Suspend(flash_die_ID_type dieID);
-			void Resume(flash_die_ID_type dieID);
-			sim_time_type GetSuspendProgramTime();
-			sim_time_type GetSuspendEraseTime();
-			unsigned long Get_total_program_count() const { return STAT_progamCount; }
-			unsigned long Get_total_erase_count() const { return STAT_eraseCount; }
-			void Report_results_in_XML(std::string name_prefix, Utils::XmlWriter& xmlwriter);
-			LPA_type Get_metadata(flash_die_ID_type die_id, flash_plane_ID_type plane_id, flash_block_ID_type block_id, flash_page_ID_type page_id);//A simplification to decrease the complexity of GC execution! The GC unit may need to know the metadata of a page to decide if a page is valid or invalid. 
+				void Suspend(flash_die_ID_type dieID);
+				void Resume(flash_die_ID_type dieID);
+				sim_time_type GetSuspendProgramTime();
+				sim_time_type GetSuspendEraseTime();
+				unsigned long long Get_total_plane_program_count() const
+				{
+					unsigned long long sum = 0;
+					for (unsigned int die_id = 0; die_id < die_no; die_id++) {
+						for (unsigned int plane_id = 0; plane_id < Dies[die_id]->Plane_no; plane_id++) {
+							sum += Dies[die_id]->Planes[plane_id]->Progam_count;
+						}
+					}
+					return sum;
+				}
+				unsigned long long Get_total_plane_erase_count() const
+				{
+					unsigned long long sum = 0;
+					for (unsigned int die_id = 0; die_id < die_no; die_id++) {
+						for (unsigned int plane_id = 0; plane_id < Dies[die_id]->Plane_no; plane_id++) {
+							sum += Dies[die_id]->Planes[plane_id]->Erase_count;
+						}
+					}
+					return sum;
+				}
+				void Report_results_in_XML(std::string name_prefix, Utils::XmlWriter& xmlwriter);
+				LPA_type Get_metadata(flash_die_ID_type die_id, flash_plane_ID_type plane_id, flash_block_ID_type block_id, flash_page_ID_type page_id);//A simplification to decrease the complexity of GC execution! The GC unit may need to know the metadata of a page to decide if a page is valid or invalid. 
 		private:
 			Flash_Technology_Type flash_technology;
 			Internal_Status status;

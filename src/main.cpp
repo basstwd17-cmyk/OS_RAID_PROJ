@@ -5,7 +5,8 @@
 #include <cstring>
 #include "ssd/SSD_Defs.h"
 #include "exec/Execution_Parameter_Set.h"
-#include "exec/SSD_Device.h"
+#include "exec/RAID_Device.h"
+#include "exec/Storage_Device.h"
 #include "exec/Host_System.h"
 #include "utils/rapidxml/rapidxml.hpp"
 #include "utils/DistributionTypes.h"
@@ -15,11 +16,11 @@ using namespace std;
 
 void command_line_args(char* argv[], string& input_file_path, string& workload_file_path)
 {
-
+// argv 배열을 돌면서, -i(SSD 설정 파일) 또는 -w(워크로드 파일) 옵션을 찾아서 파일 경로를 저장
 	for (int arg_cntr = 1; arg_cntr < 5; arg_cntr++) {
 		string arg = argv[arg_cntr];
 
-		char file_path_switch[] = "-i";
+		char file_path_switch[] = "-i"; // -i 옵션
 		if (arg.compare(0, strlen(file_path_switch), file_path_switch) == 0) {
 			input_file_path.assign(argv[++arg_cntr]);
 			//cout << input_file_path << endl;
@@ -35,6 +36,7 @@ void command_line_args(char* argv[], string& input_file_path, string& workload_f
 	}
 }
 
+// SSD 설정 파일 읽기
 void read_configuration_parameters(const string ssd_config_file_path, Execution_Parameter_Set* exec_params)
 {
 	ifstream ssd_config_file;
@@ -63,7 +65,6 @@ void read_configuration_parameters(const string ssd_config_file_path, Execution_
 			doc.parse<0>(temp_string);
 			rapidxml::xml_node<> *mqsim_config = doc.first_node("Execution_Parameter_Set");
 			if (mqsim_config != NULL) {
-				exec_params = new Execution_Parameter_Set;
 				exec_params->XML_deserialize(mqsim_config);
 			} else {
 				PRINT_MESSAGE("Error in the SSD configuration file!")
@@ -85,6 +86,7 @@ void read_configuration_parameters(const string ssd_config_file_path, Execution_
 	ssd_config_file.close();
 }
 
+// 워크로드 정의 읽기
 std::vector<std::vector<IO_Flow_Parameter_Set*>*>* read_workload_definitions(const string workload_defs_file_path)
 {
 	std::vector<std::vector<IO_Flow_Parameter_Set*>*>* io_scenarios = new std::vector<std::vector<IO_Flow_Parameter_Set*>*>;
@@ -228,15 +230,9 @@ std::vector<std::vector<IO_Flow_Parameter_Set*>*>* read_workload_definitions(con
 	return io_scenarios;
 }
 
-void collect_results(SSD_Device& ssd, Host_System& host, const char* output_file_path)
+// 시뮬레이션 결과를 XML로 저장
+void collect_results(Storage_Device& device, Host_System& host, const char* output_file_path)
 {
-	std::vector<Host_Components::IO_Flow_Base*> IO_flows = host.Get_io_flows();
-	uint64_t host_write_bytes_total = 0;
-	for (auto& flow : IO_flows) {
-		host_write_bytes_total += flow->Get_transferred_bytes_write();
-	}
-	ssd.Set_external_host_write_bytes(host_write_bytes_total);
-
 	Utils::XmlWriter xmlwriter;
 	xmlwriter.Open(output_file_path);
 
@@ -244,10 +240,11 @@ void collect_results(SSD_Device& ssd, Host_System& host, const char* output_file
 	xmlwriter.Write_open_tag(tmp);
 	
 	host.Report_results_in_XML("", xmlwriter);
-	ssd.Report_results_in_XML("", xmlwriter);
+	device.Report_results_in_XML("", xmlwriter);
 
 	xmlwriter.Write_close_tag();
 
+	std::vector<Host_Components::IO_Flow_Base*> IO_flows = host.Get_io_flows();
 	for (unsigned int stream_id = 0; stream_id < IO_flows.size(); stream_id++) {
 		cout << "Flow " << IO_flows[stream_id]->ID() << " - total requests generated: " << IO_flows[stream_id]->Get_generated_request_count()
 			<< " total requests serviced:" << IO_flows[stream_id]->Get_serviced_request_count() << endl;
@@ -293,23 +290,32 @@ int main(int argc, char* argv[])
 		for (auto io_flow_def = (*io_scen)->begin(); io_flow_def != (*io_scen)->end(); io_flow_def++) {
 			exec_params->Host_Configuration.IO_Flow_Definitions.push_back(*io_flow_def);
 		}
+		
+		// ?????IO ????????(exec_params -> Host_Configuration.IO_Flow_Definitions)
+		exec_params->Host_Configuration.Input_file_path = workload_defs_file_path.substr(0, workload_defs_file_path.find_last_of('.')); //Create Host_System based on the specified parameters
+		
+		// RAID 장치 생성
+		RAID_Device* raid_device = new RAID_Device(&exec_params->SSD_Device_Configuration, &exec_params->Host_Configuration.IO_Flow_Definitions);
+		{
+			Host_System host(&exec_params->Host_Configuration, exec_params->SSD_Device_Configuration.Enabled_Preconditioning, raid_device->Get_host_interface());
+			host.Attach_storage_device(raid_device);
 
-		SSD_Device ssd(&exec_params->SSD_Device_Configuration, &exec_params->Host_Configuration.IO_Flow_Definitions);//Create SSD_Device based on the specified parameters
-		exec_params->Host_Configuration.Input_file_path = workload_defs_file_path.substr(0, workload_defs_file_path.find_last_of("."));//Create Host_System based on the specified parameters
-		Host_System host(&exec_params->Host_Configuration, exec_params->SSD_Device_Configuration.Enabled_Preconditioning, ssd.Host_interface);
-		host.Attach_ssd_device(&ssd);
+			Simulator->Start_simulation(); // 시뮬레이션 시작
 
-		Simulator->Start_simulation();
+			time_t end_time = time(0);
+			dt = ctime(&end_time);
+			PRINT_MESSAGE("MQSim finished at " << dt)
+			uint64_t duration = (uint64_t)difftime(end_time, start_time);
+			PRINT_MESSAGE("Total simulation time: " << duration / 3600 << ":" << (duration % 3600) / 60 << ":" << ((duration % 3600) % 60))
+			PRINT_MESSAGE("");
 
-		time_t end_time = time(0);
-		dt = ctime(&end_time);
-		PRINT_MESSAGE("MQSim finished at " << dt)
-		uint64_t duration = (uint64_t)difftime(end_time, start_time);
-		PRINT_MESSAGE("Total simulation time: " << duration / 3600 << ":" << (duration % 3600) / 60 << ":" << ((duration % 3600) % 60))
-		PRINT_MESSAGE("");
+			PRINT_MESSAGE("Writing results to output file .......");
+			
+			// Write results for this scenario
+			collect_results(*raid_device, host, (workload_defs_file_path.substr(0, workload_defs_file_path.find_last_of(".")) + "_scenario_" + std::to_string(cntr) + ".xml").c_str());
+		}
 
-		PRINT_MESSAGE("Writing results to output file .......");
-		collect_results(ssd, host, (workload_defs_file_path.substr(0, workload_defs_file_path.find_last_of(".")) + "_scenario_" + std::to_string(cntr) + ".xml").c_str());
+		delete raid_device;
 	}
     cout << "Simulation complete; Press any key to exit." << endl;
 

@@ -1,9 +1,9 @@
-# MQSim output-comparison baseline
+# MQSim RAID0
 
-This branch contains a clean MQSim source tree with the additional XML metrics
-used to compare a single SSD against the RAID0 and SWANS variants. The directory
-layout follows the original `MQSim-master` tree, while generated binaries,
-traces, and simulation results are intentionally excluded.
+This is the stable RAID0 branch. It keeps the original `MQSim-master` directory
+layout and adds a host-side RAID controller that splits requests across
+independent MQSim SSD backends. SWANS policy, migration, and zone-remapping code
+is intentionally absent from this branch.
 
 ## Repository branches
 
@@ -52,15 +52,36 @@ On PowerShell:
 The simulator writes a generated report beside the workload file, such as
 `workload_scenario_1.xml`. These reports are deliberately not versioned.
 
-## Comparison output added on this branch
+## RAID0 scope
 
-- normalized 100-bin total/read/write IOPS per flow
-- host write bytes and approximate flash write amplification
-- flash page program and erase counts
-- per-SSD and per-plane erase-count distribution and histogram
+- configurable SSD count and stripe-unit size
+- stripe-aware request splitting and parent-request completion aggregation
+- per-SSD request, sector, latency, and flash wear statistics
+- RAID-level completion latency and completion-skew statistics
+- output fields aligned with `baseline/mqsim-output`
 
-These additions change reporting only; the included baseline keeps the original
-single-SSD execution path.
+The implementation starts from the last RAID0-only revision before SWANS and
+selectively includes the later fixes that are independent of SWANS:
+
+- trace replay arrival times no longer double-count the replay offset
+- flash validity bitmaps use a modulo-64 bit index
+- `Ideal_Mapping_Table` is serialized from the correct setting
+- RAID request latency starts at the host request initiation time
+
+This preserves the simple RAID0 path while retaining the general correctness
+improvements found during later SWANS work.
+
+## Configuration
+
+`ssdconfig.xml` contains the RAID settings:
+
+```xml
+<SSD_Count>8</SSD_Count>
+<Stripe_Unit_LBA>4</Stripe_Unit_LBA>
+```
+
+The included `workload.xml` is synthetic and uses only valid channels and chips
+for the included SSD configuration, so it can be run without external data.
 
 ## Trace workloads
 
@@ -68,6 +89,9 @@ Raw traces are not stored in this repository. Put local trace files in an
 ignored `traces/` directory and reference them from a workload XML using a
 relative path. This keeps the source repository small and portable while making
 the trace dependency explicit.
+
+Use `PAGE_LEVEL` address mapping. The upstream `HYBRID` mapping class is retained
+for source compatibility but is not implemented as a complete runnable FTL.
 
 ## Upstream
 
