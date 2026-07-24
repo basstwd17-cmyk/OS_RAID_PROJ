@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <assert.h>
 #include <stdexcept>
@@ -245,16 +246,31 @@ namespace SSD_Components
 		delete[] Plane_ids;
 	}
 
-	inline void AddressMappingDomain::Update_mapping_info(const bool ideal_mapping, const stream_id_type stream_id, const LPA_type lpa, const PPA_type ppa, const page_status_type page_status_bitmap)
-	{
-		if (ideal_mapping) {
-			GlobalMappingTable[lpa].PPA = ppa;
-			GlobalMappingTable[lpa].WrittenStateBitmap = page_status_bitmap;
+		inline void AddressMappingDomain::Update_mapping_info(const bool ideal_mapping, const stream_id_type stream_id, const LPA_type lpa, const PPA_type ppa, const page_status_type page_status_bitmap)
+		{
+			if (ideal_mapping) {
+				GlobalMappingTable[lpa].PPA = ppa;
+				GlobalMappingTable[lpa].WrittenStateBitmap = page_status_bitmap;
 			GlobalMappingTable[lpa].TimeStamp = CurrentTimeStamp;
 		} else {
-			CMT->Update_mapping_info(stream_id, lpa, ppa, page_status_bitmap);
+				CMT->Update_mapping_info(stream_id, lpa, ppa, page_status_bitmap);
+			}
 		}
-	}
+
+		static inline page_status_type make_sector_mask(unsigned int start_sector, unsigned int sector_count, unsigned int sectors_per_page)
+		{
+			if (sector_count == 0 || start_sector >= sectors_per_page) {
+				return UNWRITTEN_LOGICAL_PAGE;
+			}
+			if (start_sector + sector_count > sectors_per_page) {
+				sector_count = sectors_per_page - start_sector;
+			}
+			if (sector_count >= 64) {
+				return FULL_PROGRAMMED_PAGE;
+			}
+			page_status_type mask = (((page_status_type)0x1) << sector_count) - 1;
+			return mask << start_sector;
+		}
 
 	inline page_status_type AddressMappingDomain::Get_page_status(const bool ideal_mapping, const stream_id_type stream_id, const LPA_type lpa)
 	{
@@ -754,10 +770,10 @@ namespace SSD_Components
 		delete[] assigned_lpas;
 	}
 
-	void Address_Mapping_Unit_Page_Level::Allocate_new_page_for_gc(NVM_Transaction_Flash_WR* transaction, bool is_translation_page)
-	{
-		if (is_translation_page) {
-			MPPN_type mppn = domains[transaction->Stream_id]->GlobalTranslationDirectory[transaction->LPA].MPPN;
+		void Address_Mapping_Unit_Page_Level::Allocate_new_page_for_gc(NVM_Transaction_Flash_WR* transaction, bool is_translation_page)
+		{
+			if (is_translation_page) {
+				MPPN_type mppn = domains[transaction->Stream_id]->GlobalTranslationDirectory[transaction->LPA].MPPN;
 			if (mppn == NO_MPPN) {
 				PRINT_ERROR("Unexpected situation occured for gc write in Allocate_new_page_for_gc function!")
 			}
@@ -823,12 +839,119 @@ namespace SSD_Components
 				}
 				domains[stream_id]->CMT->Reserve_slot_for_lpn(stream_id, transaction->LPA);
 				domains[stream_id]->CMT->Insert_new_mapping_info(stream_id, transaction->LPA, transaction->PPA, transaction->write_sectors_bitmap);
+				}
 			}
 		}
-	}
 
-	void Address_Mapping_Unit_Page_Level::allocate_plane_for_preconditioning(stream_id_type stream_id, LPA_type lpn, NVM::FlashMemory::Physical_Page_Address& targetAddress)
-	{
+		void Address_Mapping_Unit_Page_Level::Discard_logical_range(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count)
+		{
+			if (lha_count == 0 || sector_no_per_page == 0 || stream_id >= no_of_input_streams) {
+				return;
+			}
+
+			AddressMappingDomain* domain = domains[stream_id];
+			if (domain == NULL || domain->Total_logical_pages_no == 0) {
+				return;
+			}
+
+			const LHA_type end_lha = start_lha + lha_count - 1;
+			LPA_type first_lpa = start_lha / sector_no_per_page;
+			LPA_type last_lpa = end_lha / sector_no_per_page;
+			if (first_lpa >= domain->Total_logical_pages_no) {
+				return;
+			}
+			if (last_lpa >= domain->Total_logical_pages_no) {
+				last_lpa = domain->Total_logical_pages_no - 1;
+			}
+
+			const page_status_type page_mask = sector_no_per_page >= 64
+				? FULL_PROGRAMMED_PAGE
+				: ((((page_status_type)0x1) << sector_no_per_page) - 1);
+
+			for (LPA_type lpa = first_lpa; lpa <= last_lpa; lpa++) {
+				const LHA_type page_start_lha = lpa * sector_no_per_page;
+				const LHA_type page_end_lha = page_start_lha + sector_no_per_page - 1;
+				const LHA_type discard_start = std::max(start_lha, page_start_lha);
+				const LHA_type discard_end = std::min(end_lha, page_end_lha);
+				if (discard_end < discard_start) {
+					continue;
+				}
+
+				const unsigned int start_sector = (unsigned int)(discard_start - page_start_lha);
+				const unsigned int sector_count = (unsigned int)(discard_end - discard_start + 1);
+				const page_status_type discard_mask = make_sector_mask(start_sector, sector_count, sector_no_per_page) & page_mask;
+				if (discard_mask == UNWRITTEN_LOGICAL_PAGE) {
+					continue;
+				}
+
+				if (is_lpa_locked_for_gc(stream_id, lpa)) {
+					domain->Pending_discard_masks[lpa] |= discard_mask;
+					continue;
+				}
+				discard_lpa_sector_mask(stream_id, lpa, discard_mask);
+			}
+		}
+
+		void Address_Mapping_Unit_Page_Level::discard_lpa_sector_mask(stream_id_type stream_id, LPA_type lpa, page_status_type discard_mask)
+		{
+			if (stream_id >= no_of_input_streams || discard_mask == UNWRITTEN_LOGICAL_PAGE) {
+				return;
+			}
+			AddressMappingDomain* domain = domains[stream_id];
+			if (domain == NULL || lpa >= domain->Total_logical_pages_no) {
+				return;
+			}
+
+			const page_status_type page_mask = sector_no_per_page >= 64
+				? FULL_PROGRAMMED_PAGE
+				: ((((page_status_type)0x1) << sector_no_per_page) - 1);
+			discard_mask &= page_mask;
+
+			bool cmt_has_entry = false;
+			PPA_type old_ppa = NO_PPA;
+			page_status_type old_status = UNWRITTEN_LOGICAL_PAGE;
+			if (ideal_mapping_table) {
+				old_ppa = domain->GlobalMappingTable[lpa].PPA;
+				old_status = domain->GlobalMappingTable[lpa].WrittenStateBitmap;
+			} else {
+				cmt_has_entry = domain->CMT->Exists(stream_id, lpa);
+				if (cmt_has_entry) {
+					old_ppa = domain->CMT->Retrieve_ppa(stream_id, lpa);
+					old_status = domain->CMT->Get_bitmap_vector_of_written_sectors(stream_id, lpa);
+				} else {
+					old_ppa = domain->GlobalMappingTable[lpa].PPA;
+					old_status = domain->GlobalMappingTable[lpa].WrittenStateBitmap;
+				}
+			}
+
+			if (old_ppa == NO_PPA) {
+				return;
+			}
+
+			old_status &= page_mask;
+			const page_status_type new_status = old_status & (~discard_mask);
+			PPA_type new_ppa = old_ppa;
+			if (new_status == UNWRITTEN_LOGICAL_PAGE) {
+				NVM::FlashMemory::Physical_Page_Address old_address;
+				Convert_ppa_to_address(old_ppa, old_address);
+				block_manager->Invalidate_page_in_block(stream_id, old_address);
+				new_ppa = NO_PPA;
+			}
+
+			if (ideal_mapping_table) {
+				domain->Update_mapping_info(ideal_mapping_table, stream_id, lpa, new_ppa, new_status);
+			} else {
+				if (cmt_has_entry) {
+					domain->CMT->Update_mapping_info(stream_id, lpa, new_ppa, new_status);
+				}
+				domain->GlobalMappingTable[lpa].PPA = new_ppa;
+				domain->GlobalMappingTable[lpa].WrittenStateBitmap = new_status;
+				domain->GlobalMappingTable[lpa].TimeStamp = CurrentTimeStamp;
+			}
+		}
+
+		void Address_Mapping_Unit_Page_Level::allocate_plane_for_preconditioning(stream_id_type stream_id, LPA_type lpn, NVM::FlashMemory::Physical_Page_Address& targetAddress)
+		{
 		AddressMappingDomain* domain = domains[stream_id];
 
 		switch (domain->PlaneAllocationScheme) {
@@ -1818,6 +1941,13 @@ namespace SSD_Components
 			delete (*write_tr).second;
 			domains[stream_id]->Write_transactions_behind_LPA_barrier.erase(write_tr);
 			write_tr = domains[stream_id]->Write_transactions_behind_LPA_barrier.find(lpa);
+		}
+
+		auto pending_discard = domains[stream_id]->Pending_discard_masks.find(lpa);
+		if (pending_discard != domains[stream_id]->Pending_discard_masks.end()) {
+			page_status_type discard_mask = pending_discard->second;
+			domains[stream_id]->Pending_discard_masks.erase(pending_discard);
+			discard_lpa_sector_mask(stream_id, lpa, discard_mask);
 		}
 	}
 

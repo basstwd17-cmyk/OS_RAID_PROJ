@@ -27,6 +27,7 @@ public:
 	virtual unsigned int Get_no_of_LHAs_in_an_NVM_write_unit() = 0;
 	virtual LPA_type Convert_host_logical_address_to_device_address(LHA_type lha) = 0;
 	virtual page_status_type Find_NVM_subunit_access_bitmap(LHA_type lha) = 0;
+	virtual void Discard_logical_range(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count) {}
 };
 
 #endif

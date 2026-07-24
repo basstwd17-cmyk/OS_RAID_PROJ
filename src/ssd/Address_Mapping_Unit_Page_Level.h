@@ -105,9 +105,10 @@ namespace SSD_Components
 		std::multimap<LPA_type, NVM_Transaction_Flash*> Waiting_unmapped_program_transactions;
 		std::multimap<MVPN_type, LPA_type> ArrivingMappingEntries;
 		std::set<MVPN_type> DepartingMappingEntries;
-		std::set<LPA_type> Locked_LPAs;//Used to manage race conditions, i.e. a user request accesses and LPA while GC is moving that LPA 
-		std::set<MVPN_type> Locked_MVPNs;//Used to manage race conditions
-		std::multimap<LPA_type, NVM_Transaction_Flash*> Read_transactions_behind_LPA_barrier;
+			std::set<LPA_type> Locked_LPAs;//Used to manage race conditions, i.e. a user request accesses and LPA while GC is moving that LPA 
+			std::set<MVPN_type> Locked_MVPNs;//Used to manage race conditions
+			std::map<LPA_type, page_status_type> Pending_discard_masks;
+			std::multimap<LPA_type, NVM_Transaction_Flash*> Read_transactions_behind_LPA_barrier;
 		std::multimap<LPA_type, NVM_Transaction_Flash*> Write_transactions_behind_LPA_barrier;
 		std::set<MVPN_type> MVPN_read_transactions_waiting_behind_barrier;
 		std::set<MVPN_type> MVPN_write_transaction_waiting_behind_barrier;
@@ -151,11 +152,12 @@ namespace SSD_Components
 		unsigned int Get_cmt_capacity();
 		unsigned int Get_current_cmt_occupancy_for_stream(stream_id_type stream_id);
 		void Translate_lpa_to_ppa_and_dispatch(const std::list<NVM_Transaction*>& transactionList);
-		void Get_data_mapping_info_for_gc(const stream_id_type stream_id, const LPA_type lpa, PPA_type& ppa, page_status_type& page_state);
-		void Get_translation_mapping_info_for_gc(const stream_id_type stream_id, const MVPN_type mvpn, MPPN_type& mppa, sim_time_type& timestamp);
-		void Allocate_new_page_for_gc(NVM_Transaction_Flash_WR* transaction, bool is_translation_page);
+			void Get_data_mapping_info_for_gc(const stream_id_type stream_id, const LPA_type lpa, PPA_type& ppa, page_status_type& page_state);
+			void Get_translation_mapping_info_for_gc(const stream_id_type stream_id, const MVPN_type mvpn, MPPN_type& mppa, sim_time_type& timestamp);
+			void Allocate_new_page_for_gc(NVM_Transaction_Flash_WR* transaction, bool is_translation_page);
+			void Discard_logical_range(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count);
 
-		void Store_mapping_table_on_flash_at_start();
+			void Store_mapping_table_on_flash_at_start();
 		LPA_type Get_logical_pages_count(stream_id_type stream_id);
 		NVM::FlashMemory::Physical_Page_Address Convert_ppa_to_address(const PPA_type ppa);
 		void Convert_ppa_to_address(const PPA_type ppn, NVM::FlashMemory::Physical_Page_Address& address);
@@ -173,9 +175,10 @@ namespace SSD_Components
 		unsigned int CMT_entry_size, GTD_entry_size;//In CMT MQSim stores (lpn, ppn, page status bits) but in GTD it only stores (ppn, page status bits)
 		void allocate_plane_for_user_write(NVM_Transaction_Flash_WR* transaction);
 		void allocate_page_in_plane_for_user_write(NVM_Transaction_Flash_WR* transaction, bool is_for_gc);
-		void allocate_plane_for_translation_write(NVM_Transaction_Flash* transaction);
-		void allocate_page_in_plane_for_translation_write(NVM_Transaction_Flash* transaction, MVPN_type mvpn, bool is_for_gc);
-		void allocate_plane_for_preconditioning(stream_id_type stream_id, LPA_type lpn, NVM::FlashMemory::Physical_Page_Address& targetAddress);
+			void allocate_plane_for_translation_write(NVM_Transaction_Flash* transaction);
+			void allocate_page_in_plane_for_translation_write(NVM_Transaction_Flash* transaction, MVPN_type mvpn, bool is_for_gc);
+			void discard_lpa_sector_mask(stream_id_type stream_id, LPA_type lpa, page_status_type discard_mask);
+			void allocate_plane_for_preconditioning(stream_id_type stream_id, LPA_type lpn, NVM::FlashMemory::Physical_Page_Address& targetAddress);
 		bool request_mapping_entry(const stream_id_type streamID, const LPA_type lpn);
 		void handle_transaction_serviced_signal_from_PHY(NVM_Transaction_Flash* transaction);
 		bool translate_lpa_to_ppa(stream_id_type streamID, NVM_Transaction_Flash* transaction);

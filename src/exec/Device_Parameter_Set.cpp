@@ -40,7 +40,20 @@ Device_Parameter_Set::Device_Parameter_Set()
 	  Chip_No_Per_Channel(4),
 	  Flash_Comm_Protocol(SSD_Components::ONFI_Protocol::NVDDR2),
 	  SSD_Count(1),
-	  Stripe_Unit_LBA(8)
+	  Stripe_Unit_LBA(8),
+	  SWANS_Enabled(false),
+	  SWANS_Zone_Size_LBA(0),
+	  Zone_Stripe_Multiplier(128),
+	  SWANS_Epoch_Length(40000000000ULL),
+	  SWANS_Epoch_Default(40000000000ULL),
+	  SWANS_Epoch_Placement(40000000000ULL),
+	  SWANS_Epoch_Migration(40000000000ULL),
+	  SWANS_TH_Precautionary(5.0),
+	  SWANS_TH_Critical(15.0),
+	  SWANS_Max_Concurrent_Migrations(1),
+	  SWANS_Migration_Buffer_Limit(64),
+	  SWANS_Migration_Working_Queue_Limit(64),
+	  SWANS_Buffered_Write_Completion_Mode("DEFERRED")
 {
 }
 // static -> 파라미터 멤버화
@@ -380,6 +393,58 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 	val = std::to_string(Stripe_Unit_LBA);
 	xmlwriter.Write_attribute_string(attr, val);     // 스트라이프 유닛 크기
 
+	attr = "SWANS_Enabled";
+	val = (SWANS_Enabled ? "true" : "false");
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_Zone_Size_LBA";
+	val = std::to_string(SWANS_Zone_Size_LBA);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "Zone_Stripe_Multiplier";
+	val = std::to_string(Zone_Stripe_Multiplier);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_Epoch_Length";
+	val = std::to_string(SWANS_Epoch_Length);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_Epoch_Default";
+	val = std::to_string(SWANS_Epoch_Default);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_Epoch_Placement";
+	val = std::to_string(SWANS_Epoch_Placement);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_Epoch_Migration";
+	val = std::to_string(SWANS_Epoch_Migration);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_TH_Precautionary";
+	val = std::to_string(SWANS_TH_Precautionary);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_TH_Critical";
+	val = std::to_string(SWANS_TH_Critical);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_Max_Concurrent_Migrations";
+	val = std::to_string(SWANS_Max_Concurrent_Migrations);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_Migration_Buffer_Limit";
+	val = std::to_string(SWANS_Migration_Buffer_Limit);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_Migration_Working_Queue_Limit";
+	val = std::to_string(SWANS_Migration_Working_Queue_Limit);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_Buffered_Write_Completion_Mode";
+	val = SWANS_Buffered_Write_Completion_Mode;
+	xmlwriter.Write_attribute_string(attr, val);
+
 	Flash_Parameters.XML_serialize(xmlwriter);
 
 	xmlwriter.Write_close_tag();
@@ -643,6 +708,52 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 			} else if (strcmp(param->name(), "Stripe_Unit_LBA") == 0) {
 				std::string val = param->value();
 				Stripe_Unit_LBA = std::stoul(val);
+			} else if (strcmp(param->name(), "SWANS_Enabled") == 0) {
+				std::string val = param->value();
+				std::transform(val.begin(), val.end(), val.begin(), ::toupper);
+				SWANS_Enabled = (val.compare("FALSE") == 0 ? false : true);
+			} else if (strcmp(param->name(), "SWANS_Zone_Size_LBA") == 0) {
+				std::string val = param->value();
+				SWANS_Zone_Size_LBA = std::stoul(val);
+			} else if (strcmp(param->name(), "Zone_Stripe_Multiplier") == 0) {
+				std::string val = param->value();
+				Zone_Stripe_Multiplier = std::stoul(val);
+			} else if (strcmp(param->name(), "SWANS_Epoch_Length") == 0) {
+				std::string val = param->value();
+				SWANS_Epoch_Length = std::stoull(val);
+				SWANS_Epoch_Default = SWANS_Epoch_Length;
+				SWANS_Epoch_Placement = SWANS_Epoch_Length;
+				SWANS_Epoch_Migration = SWANS_Epoch_Length;
+			} else if (strcmp(param->name(), "SWANS_Epoch_Default") == 0) {
+				std::string val = param->value();
+				SWANS_Epoch_Default = std::stoull(val);
+				SWANS_Epoch_Length = SWANS_Epoch_Default;
+			} else if (strcmp(param->name(), "SWANS_Epoch_Placement") == 0) {
+				std::string val = param->value();
+				SWANS_Epoch_Placement = std::stoull(val);
+			} else if (strcmp(param->name(), "SWANS_Epoch_Migration") == 0) {
+				std::string val = param->value();
+				SWANS_Epoch_Migration = std::stoull(val);
+			} else if (strcmp(param->name(), "SWANS_TH_Precautionary") == 0) {
+				std::string val = param->value();
+				SWANS_TH_Precautionary = std::stod(val);
+			} else if (strcmp(param->name(), "SWANS_TH_Critical") == 0) {
+				std::string val = param->value();
+				SWANS_TH_Critical = std::stod(val);
+			} else if (strcmp(param->name(), "SWANS_Max_Concurrent_Migrations") == 0) {
+				std::string val = param->value();
+				SWANS_Max_Concurrent_Migrations = std::stoul(val);
+			} else if (strcmp(param->name(), "SWANS_Migration_Buffer_Limit") == 0) {
+				std::string val = param->value();
+				SWANS_Migration_Buffer_Limit = std::stoul(val);
+				SWANS_Migration_Working_Queue_Limit = SWANS_Migration_Buffer_Limit;
+			} else if (strcmp(param->name(), "SWANS_Migration_Working_Queue_Limit") == 0) {
+				std::string val = param->value();
+				SWANS_Migration_Working_Queue_Limit = std::stoul(val);
+			} else if (strcmp(param->name(), "SWANS_Buffered_Write_Completion_Mode") == 0) {
+				std::string val = param->value();
+				std::transform(val.begin(), val.end(), val.begin(), ::toupper);
+				SWANS_Buffered_Write_Completion_Mode = val;
 			}
 			else if (strcmp(param->name(), "Flash_Parameter_Set") == 0)
 			{

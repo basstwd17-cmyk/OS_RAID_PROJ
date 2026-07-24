@@ -12,6 +12,7 @@
 #include "../nvm_chip/NVM_Types.h"
 #include "Parameter_Set_Base.h"
 #include "Flash_Parameter_Set.h"
+#include <string>
 
 // RAID 파라미터 멤버화
 class Device_Parameter_Set : public Parameter_Set_Base
@@ -59,6 +60,19 @@ public:
 	Flash_Parameter_Set Flash_Parameters;
 	unsigned int SSD_Count; // Number of SSDs in the virtual RAID device
 	unsigned int Stripe_Unit_LBA; // Stripe unit size in LBA units
+	bool SWANS_Enabled;
+	unsigned int SWANS_Zone_Size_LBA;
+	unsigned int Zone_Stripe_Multiplier;
+	sim_time_type SWANS_Epoch_Length;
+	sim_time_type SWANS_Epoch_Default;
+	sim_time_type SWANS_Epoch_Placement;
+	sim_time_type SWANS_Epoch_Migration;
+	double SWANS_TH_Precautionary;
+	double SWANS_TH_Critical;
+	unsigned int SWANS_Max_Concurrent_Migrations;
+	unsigned int SWANS_Migration_Buffer_Limit;
+	unsigned int SWANS_Migration_Working_Queue_Limit;
+	std::string SWANS_Buffered_Write_Completion_Mode;
 	void XML_serialize(Utils::XmlWriter& xmlwriter);
 	void XML_deserialize(rapidxml::xml_node<> *node);
 };

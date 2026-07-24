@@ -32,9 +32,10 @@ namespace SSD_Components
 		void Validate_simulation_config();
 		void Start_simulation();
 		void Execute_simulator_event(MQSimEngine::Sim_Event*);
-		LPA_type Convert_host_logical_address_to_device_address(LHA_type lha);
-		page_status_type Find_NVM_subunit_access_bitmap(LHA_type lha);
-		Address_Mapping_Unit_Base* Address_Mapping_Unit;
+			LPA_type Convert_host_logical_address_to_device_address(LHA_type lha);
+			page_status_type Find_NVM_subunit_access_bitmap(LHA_type lha);
+			void Discard_logical_range(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count);
+			Address_Mapping_Unit_Base* Address_Mapping_Unit;
 		Flash_Block_Manager_Base* BlockManager;
 		GC_and_WL_Unit_Base* GC_and_WL_Unit;
 		TSU_Base * TSU;

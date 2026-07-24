@@ -50,11 +50,12 @@ public:
 		Host_Components::SATA_HBA* sata_hba) override;
 	void Start_simulation();
 	void Validate_simulation_config();
-	void Execute_simulator_event(MQSimEngine::Sim_Event* event);
-	LPA_type Convert_host_logical_address_to_device_address(LHA_type lha) override;
-	page_status_type Find_NVM_subunit_access_bitmap(LHA_type lha) override;
+		void Execute_simulator_event(MQSimEngine::Sim_Event* event);
+		LPA_type Convert_host_logical_address_to_device_address(LHA_type lha) override;
+		page_status_type Find_NVM_subunit_access_bitmap(LHA_type lha) override;
+		void Discard_logical_range(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count) override;
 
-	unsigned int Channel_count;
+		unsigned int Channel_count;
 	unsigned int Chip_no_per_channel;
 
 private:

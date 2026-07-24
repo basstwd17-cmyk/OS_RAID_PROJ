@@ -119,24 +119,6 @@ namespace Host_Components
 		sim_time_type STAT_sum_device_response_time_short_term, STAT_sum_request_delay_short_term;
 		unsigned int STAT_serviced_request_count_short_term;
 
-		struct IOPS_Period_Stats
-		{
-			sim_time_type Period_start_time;
-			sim_time_type Period_end_time;
-			unsigned int Serviced_request_count;
-			unsigned int Serviced_read_request_count;
-			unsigned int Serviced_write_request_count;
-		};
-		std::vector<IOPS_Period_Stats> iops_period_stats;
-		bool iops_periods_finalized;
-		sim_time_type current_iops_period_start_time;
-		sim_time_type next_iops_logging_milestone;
-		unsigned int current_period_serviced_request_count;
-		unsigned int current_period_serviced_read_request_count;
-		unsigned int current_period_serviced_write_request_count;
-		void finalize_iops_periods_up_to(sim_time_type now, bool include_partial_period);
-		void record_serviced_request_for_period(Host_IO_Request_Type request_type, sim_time_type completion_time);
-
 	};
 }
 

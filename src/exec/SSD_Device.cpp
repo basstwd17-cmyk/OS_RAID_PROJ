@@ -486,3 +486,10 @@ page_status_type SSD_Device::Find_NVM_subunit_access_bitmap(LHA_type lha)
 {
 	return Firmware->Find_NVM_subunit_access_bitmap(lha);
 }
+
+void SSD_Device::Discard_logical_range(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count)
+{
+	if (Memory_Type == NVM::NVM_Type::FLASH && Firmware != nullptr) {
+		((SSD_Components::FTL*)Firmware)->Discard_logical_range(stream_id, start_lha, lha_count);
+	}
+}

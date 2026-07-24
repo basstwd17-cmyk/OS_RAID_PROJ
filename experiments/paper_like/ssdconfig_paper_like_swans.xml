@@ -41,46 +41,46 @@
 		<Preferred_suspend_erase_time_for_read>700000</Preferred_suspend_erase_time_for_read>
 		<Preferred_suspend_erase_time_for_write>700000</Preferred_suspend_erase_time_for_write>
 		<Preferred_suspend_write_time_for_read>100000</Preferred_suspend_write_time_for_read>
-		<Flash_Channel_Count>8</Flash_Channel_Count>
+		<Flash_Channel_Count>2</Flash_Channel_Count>
 		<Flash_Channel_Width>1</Flash_Channel_Width>
 		<Channel_Transfer_Rate>333</Channel_Transfer_Rate>
-		<Chip_No_Per_Channel>4</Chip_No_Per_Channel>
+		<Chip_No_Per_Channel>1</Chip_No_Per_Channel>
 		<Flash_Comm_Protocol>NVDDR2</Flash_Comm_Protocol>
-		
-		<!-- RAID settings -->
+
+		<!-- RAID/SWANS parameters are identical to the RAID0 config except for SWANS_Enabled. -->
 		<SSD_Count>4</SSD_Count>
 		<Stripe_Unit_LBA>512</Stripe_Unit_LBA>
 		<SWANS_Enabled>true</SWANS_Enabled>
-		<SWANS_Zone_Size_LBA>16384</SWANS_Zone_Size_LBA>
-		<Zone_Stripe_Multiplier>8</Zone_Stripe_Multiplier>
+		<SWANS_Zone_Size_LBA>32768</SWANS_Zone_Size_LBA>
+		<Zone_Stripe_Multiplier>64</Zone_Stripe_Multiplier>
 		<SWANS_Epoch_Default>40000000000</SWANS_Epoch_Default>
 		<SWANS_Epoch_Placement>40000000000</SWANS_Epoch_Placement>
 		<SWANS_Epoch_Migration>40000000000</SWANS_Epoch_Migration>
-		<SWANS_TH_Precautionary>3</SWANS_TH_Precautionary>
-		<SWANS_TH_Critical>6</SWANS_TH_Critical>
+		<SWANS_TH_Precautionary>5</SWANS_TH_Precautionary>
+		<SWANS_TH_Critical>15</SWANS_TH_Critical>
 		<SWANS_Max_Concurrent_Migrations>1</SWANS_Max_Concurrent_Migrations>
-		<SWANS_Migration_Buffer_Limit>2048</SWANS_Migration_Buffer_Limit>
+		<SWANS_Migration_Buffer_Limit>64</SWANS_Migration_Buffer_Limit>
 		<SWANS_Migration_Working_Queue_Limit>64</SWANS_Migration_Working_Queue_Limit>
 		<SWANS_Buffered_Write_Completion_Mode>DEFERRED</SWANS_Buffered_Write_Completion_Mode>
 
 		<Flash_Parameter_Set>
 			<Flash_Technology>MLC</Flash_Technology>
 			<CMD_Suspension_Support>ERASE</CMD_Suspension_Support>
-			<Page_Read_Latency_LSB>75000</Page_Read_Latency_LSB>
-			<Page_Read_Latency_CSB>75000</Page_Read_Latency_CSB>
-			<Page_Read_Latency_MSB>75000</Page_Read_Latency_MSB>
-			<Page_Program_Latency_LSB>750000</Page_Program_Latency_LSB>
-			<Page_Program_Latency_CSB>750000</Page_Program_Latency_CSB>
-			<Page_Program_Latency_MSB>750000</Page_Program_Latency_MSB>
-			<Block_Erase_Latency>3800000</Block_Erase_Latency>
+			<Page_Read_Latency_LSB>25000</Page_Read_Latency_LSB>
+			<Page_Read_Latency_CSB>25000</Page_Read_Latency_CSB>
+			<Page_Read_Latency_MSB>25000</Page_Read_Latency_MSB>
+			<Page_Program_Latency_LSB>200000</Page_Program_Latency_LSB>
+			<Page_Program_Latency_CSB>200000</Page_Program_Latency_CSB>
+			<Page_Program_Latency_MSB>200000</Page_Program_Latency_MSB>
+			<Block_Erase_Latency>1500000</Block_Erase_Latency>
 			<Block_PE_Cycles_Limit>10000</Block_PE_Cycles_Limit>
 			<Suspend_Erase_Time>700000</Suspend_Erase_Time>
 			<Suspend_Program_Time>100000</Suspend_Program_Time>
-			<Die_No_Per_Chip>2</Die_No_Per_Chip>
-			<Plane_No_Per_Die>2</Plane_No_Per_Die>
-			<Block_No_Per_Plane>256</Block_No_Per_Plane>
-			<Page_No_Per_Block>256</Page_No_Per_Block>
-			<Page_Capacity>8192</Page_Capacity>
+			<Die_No_Per_Chip>4</Die_No_Per_Chip>
+			<Plane_No_Per_Die>4</Plane_No_Per_Die>
+			<Block_No_Per_Plane>4096</Block_No_Per_Plane>
+			<Page_No_Per_Block>128</Page_No_Per_Block>
+			<Page_Capacity>4096</Page_Capacity>
 			<Page_Metadat_Capacity>448</Page_Metadat_Capacity>
 		</Flash_Parameter_Set>
 	</Device_Parameter_Set>

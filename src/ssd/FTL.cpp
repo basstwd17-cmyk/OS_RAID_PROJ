@@ -44,6 +44,14 @@ namespace SSD_Components
 		if (this->GC_and_WL_Unit == NULL)
 			throw std::logic_error("The garbage collector is not set for FTL!");
 	}
+
+	void FTL::Discard_logical_range(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count)
+	{
+		if (Address_Mapping_Unit != NULL) {
+			Address_Mapping_Unit->Discard_logical_range(stream_id, start_lha, lha_count);
+		}
+	}
+
 	void FTL::Perform_precondition(std::vector<Utils::Workload_Statistics*> workload_stats)
 	{
 		Address_Mapping_Unit->Store_mapping_table_on_flash_at_start();

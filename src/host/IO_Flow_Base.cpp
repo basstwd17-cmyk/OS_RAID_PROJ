@@ -21,9 +21,7 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 																												STAT_min_request_delay(MAXIMUM_TIME), STAT_min_request_delay_read(MAXIMUM_TIME), STAT_min_request_delay_write(MAXIMUM_TIME),
 																												STAT_max_request_delay(0), STAT_max_request_delay_read(0), STAT_max_request_delay_write(0),
 																												STAT_transferred_bytes_total(0), STAT_transferred_bytes_read(0), STAT_transferred_bytes_write(0), progress(0), next_progress_step(0),
-																												enabled_logging(enabled_logging), logging_period(logging_period), logging_file_path(logging_file_path),
-																												iops_periods_finalized(false), current_iops_period_start_time(0), next_iops_logging_milestone(0),
-																												current_period_serviced_request_count(0), current_period_serviced_read_request_count(0), current_period_serviced_write_request_count(0)
+																												enabled_logging(enabled_logging), logging_period(logging_period), logging_file_path(logging_file_path)
 {
 	Host_IO_Request *t = NULL;
 
@@ -141,13 +139,6 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 	void IO_Flow_Base::Start_simulation()
 	{
 		next_logging_milestone = logging_period;
-		iops_period_stats.clear();
-		iops_periods_finalized = false;
-		current_iops_period_start_time = 0;
-		next_iops_logging_milestone = logging_period;
-		current_period_serviced_request_count = 0;
-		current_period_serviced_read_request_count = 0;
-		current_period_serviced_write_request_count = 0;
 		if (enabled_logging) {
 			log_file.open(logging_file_path, std::ofstream::out);
 		}
@@ -216,7 +207,6 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 			}
 			STAT_transferred_bytes_write += request->LBA_count * SECTOR_SIZE_IN_BYTE;
 		}
-		record_serviced_request_for_period(request->Type, Simulator->Time());
 
 		delete request;
 
@@ -318,7 +308,6 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 			}
 			STAT_transferred_bytes_write += request->LBA_count * SECTOR_SIZE_IN_BYTE;
 		}
-		record_serviced_request_for_period(request->Type, Simulator->Time());
 
 		delete request;
 
@@ -530,69 +519,6 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 
 		return (uint32_t)(STAT_sum_request_delay_short_term / STAT_serviced_request_count_short_term / SIM_TIME_TO_MICROSECONDS_COEFF);
 	}
-
-	void IO_Flow_Base::finalize_iops_periods_up_to(sim_time_type now, bool include_partial_period)
-	{
-		if (logging_period <= 0 || now < 0) {
-			return;
-		}
-		if (next_iops_logging_milestone <= 0) {
-			current_iops_period_start_time = 0;
-			next_iops_logging_milestone = logging_period;
-		}
-
-		if (now >= next_iops_logging_milestone) {
-			IOPS_Period_Stats period_stat;
-			period_stat.Period_start_time = current_iops_period_start_time;
-			period_stat.Period_end_time = next_iops_logging_milestone;
-			period_stat.Serviced_request_count = current_period_serviced_request_count;
-			period_stat.Serviced_read_request_count = current_period_serviced_read_request_count;
-			period_stat.Serviced_write_request_count = current_period_serviced_write_request_count;
-			if (period_stat.Serviced_request_count > 0) {
-				iops_period_stats.push_back(period_stat);
-			}
-
-			current_period_serviced_request_count = 0;
-			current_period_serviced_read_request_count = 0;
-			current_period_serviced_write_request_count = 0;
-
-			sim_time_type period_index = now / logging_period;
-			current_iops_period_start_time = period_index * logging_period;
-			next_iops_logging_milestone = current_iops_period_start_time + logging_period;
-		}
-
-		if (include_partial_period && now > current_iops_period_start_time) {
-			IOPS_Period_Stats partial_stat;
-			partial_stat.Period_start_time = current_iops_period_start_time;
-			partial_stat.Period_end_time = now;
-			partial_stat.Serviced_request_count = current_period_serviced_request_count;
-			partial_stat.Serviced_read_request_count = current_period_serviced_read_request_count;
-			partial_stat.Serviced_write_request_count = current_period_serviced_write_request_count;
-			if (partial_stat.Serviced_request_count > 0) {
-				iops_period_stats.push_back(partial_stat);
-			}
-
-			current_period_serviced_request_count = 0;
-			current_period_serviced_read_request_count = 0;
-			current_period_serviced_write_request_count = 0;
-			current_iops_period_start_time = now;
-			next_iops_logging_milestone = current_iops_period_start_time + logging_period;
-		}
-	}
-
-	void IO_Flow_Base::record_serviced_request_for_period(Host_IO_Request_Type request_type, sim_time_type completion_time)
-	{
-		if (logging_period <= 0) {
-			return;
-		}
-		finalize_iops_periods_up_to(completion_time, false);
-		current_period_serviced_request_count++;
-		if (request_type == Host_IO_Request_Type::READ) {
-			current_period_serviced_read_request_count++;
-		} else {
-			current_period_serviced_write_request_count++;
-		}
-	}
 	
 	void IO_Flow_Base::Report_results_in_XML(std::string name_prefix, Utils::XmlWriter& xmlwriter)
 	{
@@ -676,93 +602,6 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 		attr = "Max_End_to_End_Request_Delay";
 		val = std::to_string(Get_max_end_to_end_request_delay());
 		xmlwriter.Write_attribute_string(attr, val);
-
-		if (!iops_periods_finalized) {
-			finalize_iops_periods_up_to(Simulator->Time(), true);
-			iops_periods_finalized = true;
-		}
-
-		std::string ts_tag = tmp + ".IOPS_TimeSeries";
-		xmlwriter.Write_open_tag(ts_tag);
-		const unsigned int normalized_bin_count = 100;
-		sim_time_type simulation_end_time = Simulator->Time();
-		xmlwriter.Write_attribute_string("Binning", "Normalized_100");
-		xmlwriter.Write_attribute_string("Bin_Count", std::to_string(normalized_bin_count));
-		xmlwriter.Write_attribute_string("Simulation_End_Time_ns", std::to_string(simulation_end_time));
-
-		std::vector<double> bin_total(normalized_bin_count, 0.0);
-		std::vector<double> bin_read(normalized_bin_count, 0.0);
-		std::vector<double> bin_write(normalized_bin_count, 0.0);
-		if (simulation_end_time > 0) {
-			for (const auto& period_stat : iops_period_stats) {
-				if (period_stat.Period_end_time <= period_stat.Period_start_time) {
-					continue;
-				}
-				sim_time_type p_start = period_stat.Period_start_time;
-				sim_time_type p_end = period_stat.Period_end_time;
-				if (p_start >= simulation_end_time) {
-					continue;
-				}
-				if (p_end > simulation_end_time) {
-					p_end = simulation_end_time;
-				}
-				sim_time_type p_dur = p_end - p_start;
-				if (p_dur <= 0) {
-					continue;
-				}
-
-				unsigned int start_bin = (unsigned int)((long double)p_start * (long double)normalized_bin_count / (long double)simulation_end_time);
-				unsigned int end_bin = (unsigned int)(((long double)(p_end - 1) * (long double)normalized_bin_count) / (long double)simulation_end_time);
-				if (start_bin >= normalized_bin_count) {
-					start_bin = normalized_bin_count - 1;
-				}
-				if (end_bin >= normalized_bin_count) {
-					end_bin = normalized_bin_count - 1;
-				}
-
-				for (unsigned int bin_idx = start_bin; bin_idx <= end_bin; bin_idx++) {
-					sim_time_type b_start = (sim_time_type)((long double)simulation_end_time * (long double)bin_idx / (long double)normalized_bin_count);
-					sim_time_type b_end = (sim_time_type)((long double)simulation_end_time * (long double)(bin_idx + 1) / (long double)normalized_bin_count);
-					sim_time_type overlap_start = p_start > b_start ? p_start : b_start;
-					sim_time_type overlap_end = p_end < b_end ? p_end : b_end;
-					if (overlap_end <= overlap_start) {
-						continue;
-					}
-
-					double overlap_ratio = (double)(overlap_end - overlap_start) / (double)p_dur;
-					bin_total[bin_idx] += (double)period_stat.Serviced_request_count * overlap_ratio;
-					bin_read[bin_idx] += (double)period_stat.Serviced_read_request_count * overlap_ratio;
-					bin_write[bin_idx] += (double)period_stat.Serviced_write_request_count * overlap_ratio;
-				}
-			}
-		}
-
-		for (unsigned int bin_idx = 0; bin_idx < normalized_bin_count; bin_idx++) {
-			sim_time_type b_start = simulation_end_time == 0 ? 0 :
-				(sim_time_type)((long double)simulation_end_time * (long double)bin_idx / (long double)normalized_bin_count);
-			sim_time_type b_end = simulation_end_time == 0 ? 0 :
-				(sim_time_type)((long double)simulation_end_time * (long double)(bin_idx + 1) / (long double)normalized_bin_count);
-			sim_time_type b_dur = b_end - b_start;
-			double b_sec = b_dur <= 0 ? 0.0 : (double)b_dur / (double)SIM_TIME_TO_SECONDS_COEFF;
-			double iops_total = b_sec > 0.0 ? bin_total[bin_idx] / b_sec : 0.0;
-			double iops_read = b_sec > 0.0 ? bin_read[bin_idx] / b_sec : 0.0;
-			double iops_write = b_sec > 0.0 ? bin_write[bin_idx] / b_sec : 0.0;
-
-			std::string period_tag = ts_tag + ".Period";
-			xmlwriter.Write_open_tag(period_tag);
-			xmlwriter.Write_attribute_string("Bin_Index", std::to_string(bin_idx));
-			xmlwriter.Write_attribute_string("Start_Time_ns", std::to_string(b_start));
-			xmlwriter.Write_attribute_string("End_Time_ns", std::to_string(b_end));
-			xmlwriter.Write_attribute_string("Duration_ns", std::to_string(b_dur));
-			xmlwriter.Write_attribute_string("Request_Count", std::to_string(bin_total[bin_idx]));
-			xmlwriter.Write_attribute_string("Read_Request_Count", std::to_string(bin_read[bin_idx]));
-			xmlwriter.Write_attribute_string("Write_Request_Count", std::to_string(bin_write[bin_idx]));
-			xmlwriter.Write_attribute_string("IOPS", std::to_string(iops_total));
-			xmlwriter.Write_attribute_string("IOPS_Read", std::to_string(iops_read));
-			xmlwriter.Write_attribute_string("IOPS_Write", std::to_string(iops_write));
-			xmlwriter.Write_close_tag();
-		}
-		xmlwriter.Write_close_tag();
 
 		xmlwriter.Write_close_tag();
 	}

@@ -14,8 +14,8 @@
 namespace {
 	// Keep RAID result XML compact by default.
 	// Enable these when deep diagnostics are needed.
-	static const bool RAID_REPORT_INCLUDE_HOST_INTERFACE = true;
-	static const bool RAID_REPORT_INCLUDE_PLANE_DETAILS = true;
+	static const bool RAID_REPORT_INCLUDE_HOST_INTERFACE = false;
+	static const bool RAID_REPORT_INCLUDE_PLANE_DETAILS = false;
 	static const bool RAID_REPORT_INCLUDE_HISTOGRAM_BINS = true;
 	static const bool RAID_REPORT_INCLUDE_BACKEND_SSD_DETAILS = true;
 
@@ -86,8 +86,30 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 			raid_visible_lha_count = per_ssd_lha_count * ssd_count;
 		}
 	}
+	uint64_t page_lba_count = parameters->Flash_Parameters.Page_Capacity / SECTOR_SIZE_IN_BYTE;
+	if (page_lba_count == 0) {
+		page_lba_count = 1;
+	}
+	uint64_t zone_block_lba_64 = page_lba_count * parameters->Flash_Parameters.Page_No_Per_Block;
+	if (zone_block_lba_64 == 0 || zone_block_lba_64 > std::numeric_limits<unsigned int>::max()) {
+		zone_block_lba_64 = parameters->Stripe_Unit_LBA == 0 ? 1 : parameters->Stripe_Unit_LBA;
+	}
+	unsigned int zone_block_lba = static_cast<unsigned int>(zone_block_lba_64);
 
-	raid_controller = new RAID_Controller(ID() + ".RAIDController", nullptr, (unsigned int)io_flows->size(), ssd_count, parameters->Stripe_Unit_LBA);
+	raid_controller = new RAID_Controller(ID() + ".RAIDController", nullptr, (unsigned int)io_flows->size(), ssd_count,
+		parameters->Stripe_Unit_LBA,
+		zone_block_lba,
+		parameters->SWANS_Enabled,
+		parameters->SWANS_Zone_Size_LBA,
+		parameters->Zone_Stripe_Multiplier,
+		parameters->SWANS_Epoch_Default,
+		parameters->SWANS_Epoch_Placement,
+		parameters->SWANS_Epoch_Migration,
+		parameters->SWANS_TH_Precautionary,
+		parameters->SWANS_TH_Critical,
+		parameters->SWANS_Max_Concurrent_Migrations,
+		parameters->SWANS_Migration_Working_Queue_Limit,
+		raid_visible_lha_count);
 	Simulator->AddObject(raid_controller); // 시뮬레이터에 등록
 
 	switch (parameters->HostInterface_Type) {
