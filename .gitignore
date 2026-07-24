@@ -1,0 +1,37 @@
+# Build products
+/build/
+/MQSim
+/MQSim.exe
+*.o
+*.obj
+*.d
+*.exe
+*.pdb
+*.ilk
+
+# Generated simulator and experiment data
+/runs/
+/results/
+/artifacts/
+/traces/
+*_scenario_*.xml
+*.log
+
+# Local backups and archives
+*.bak
+*.zip
+*.orig
+*~
+
+# Editors and caches
+.vs/
+.vscode/
+.idea/
+.cursor/
+.claude/
+*.user
+*.code-workspace
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
