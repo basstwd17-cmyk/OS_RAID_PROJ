@@ -1,18 +1,49 @@
 # MQSim RAID0 + SWANS
 
-This is the active research branch. It keeps the original `MQSim-master`
-directory layout, the RAID0 request path, and the current SWANS placement and
-migration implementation. Use `main` when only the stable RAID0 path is needed.
+This repository is an MQSim-based storage simulator with a host-side RAID0
+controller and an optional SWANS placement and migration policy. The default
+branch, `main`, supports both modes from the same source tree.
+
+## Modes
+
+Choose the mode in the SSD configuration XML.
+
+### RAID0 only
+
+```xml
+<SSD_Count>4</SSD_Count>
+<Stripe_Unit_LBA>512</Stripe_Unit_LBA>
+<SWANS_Enabled>false</SWANS_Enabled>
+```
+
+With SWANS disabled, requests use the regular RAID0 stripe mapping path. Zone
+mapping, policy evaluation, redirect, and migration are not initialized.
+
+### RAID0 + SWANS
+
+```xml
+<SSD_Count>4</SSD_Count>
+<Stripe_Unit_LBA>512</Stripe_Unit_LBA>
+<SWANS_Enabled>true</SWANS_Enabled>
+```
+
+When enabled, SWANS tracks logical zones and per-stream block writes, measures
+write imbalance across SSDs, and can redirect new writes or migrate data between
+SSDs. Configure its zone size, epoch durations, thresholds, and migration
+limits with the accompanying `SWANS_*` XML parameters.
+
+Use the boolean strings `true` and `false` for `SWANS_Enabled`.
 
 ## Repository branches
 
-- `baseline/mqsim-output`: original MQSim behavior plus comparable output
-  metrics.
-- `main`: the stable RAID0 implementation.
-- `develop/swans`: the current RAID0 + SWANS research implementation.
+- `main`: the active implementation; supports RAID0-only and RAID0 + SWANS
+  through XML configuration.
+- `archive/raid0-only`: preserved RAID0-only implementation from before the
+  SWANS integration.
+- `baseline/mqsim-output`: original MQSim behavior with comparable output
+  metrics, for baseline comparisons.
 
-Each branch is a complete buildable source tree. Check out only the variant you
-need; no source folder has to be copied out of another branch.
+Each branch is a complete buildable source tree.
 
 ## What is tracked
 
@@ -66,22 +97,10 @@ The test target builds and runs:
 - normal, redirect, and migration policy states
 - completion-driven migration state machine
 - buffered writes, replay, source discard, and backpressure statistics
-- the common RAID0 correctness fixes also retained on `main`
+- RAID0 request splitting, completion aggregation, and per-SSD statistics
 
-## Configuration
-
-`ssdconfig.xml` contains the RAID settings:
-
-```xml
-<SSD_Count>4</SSD_Count>
-<Stripe_Unit_LBA>512</Stripe_Unit_LBA>
-<SWANS_Enabled>true</SWANS_Enabled>
-```
-
-The included `workload.xml` is synthetic and uses only valid channels and chips
-for the included SSD configuration, so it can be run without external data.
-Matched RAID0/SWANS paper-like inputs are under `experiments/paper_like/`;
-their raw traces must be supplied separately.
+Matched RAID0/SWANS paper-like inputs are under `experiments/paper_like/`.
+Their raw trace files must be supplied separately.
 
 ## Current research limitations
 
@@ -89,8 +108,8 @@ their raw traces must be supplied separately.
   class is incomplete.
 - Policy tests cover zone mapping, wear decisions, and the single-migration
   state machine; they are not a full-system correctness proof.
-- Keep `SWANS_Max_Concurrent_Migrations` at `1`. Cross-zone replay with multiple
-  simultaneous migrations has not been fully validated.
+- Keep `SWANS_Max_Concurrent_Migrations` at `1`. Cross-zone replay with
+  multiple simultaneous migrations has not been fully validated.
 - Source-discard support is implemented for page-level mapping. Other mapping
   modes must not be used for SWANS migration.
 
@@ -103,5 +122,5 @@ the trace dependency explicit.
 
 ## Upstream
 
-This project is derived from MQSim. See `LICENSE` and `fast18/README.md` for the
-upstream license and FAST'18 example notes.
+This project is derived from MQSim. See `LICENSE` and `fast18/README.md` for
+the upstream license and FAST'18 example notes.
