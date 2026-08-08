@@ -226,7 +226,7 @@ void RAID_Device::Execute_simulator_event(MQSimEngine::Sim_Event* event)
 
 void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWriter& xmlwriter) // Host_interface와 각 SSD들의 결과를 XML로 저장
 {
-	std::string tmp = name_prefix + ".RAIDDevice";
+	std::string tmp = name_prefix.empty() ? ID() : name_prefix + ".RAIDDevice";
 	xmlwriter.Write_open_tag(tmp);
 	if (Host_interface != nullptr && RAID_REPORT_INCLUDE_HOST_INTERFACE) {
 		Host_interface->Report_results_in_XML(tmp, xmlwriter);
@@ -240,6 +240,7 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 		unsigned long long total_flash_page_programs_all_ssds = 0;
 		unsigned long long total_flash_page_erases_all_ssds = 0;
 		unsigned long long total_host_write_bytes_dispatched_all_ssds = 0;
+		unsigned long long total_host_write_bytes_attributed_all_ssds = 0;
 		unsigned long long total_flash_programmed_bytes_all_ssds = 0;
 		std::map<unsigned int, uint64_t> raid_erase_histogram;
 		for (unsigned int ssd_idx = 0; ssd_idx < ssds.size(); ssd_idx++) {
@@ -315,12 +316,15 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 			}
 			unsigned long long host_write_bytes_to_ssd = raid_controller == nullptr ? 0 :
 				(unsigned long long)raid_controller->Get_ssd_subrequest_write_sectors(ssd_idx) * (unsigned long long)SECTOR_SIZE_IN_BYTE;
+			unsigned long long attributed_host_write_bytes_to_ssd = raid_controller == nullptr ? 0 :
+				(unsigned long long)raid_controller->Get_ssd_attributed_host_write_sectors(ssd_idx) * (unsigned long long)SECTOR_SIZE_IN_BYTE;
 			unsigned long long flash_programmed_bytes_to_ssd = ssd_flash_page_programs * (unsigned long long)cfg.Flash_Parameters.Page_Capacity;
-			double approx_flash_wa = host_write_bytes_to_ssd == 0 ? 0.0 :
-				(double)flash_programmed_bytes_to_ssd / (double)host_write_bytes_to_ssd;
+			double approx_flash_wa = attributed_host_write_bytes_to_ssd == 0 ? 0.0 :
+				(double)flash_programmed_bytes_to_ssd / (double)attributed_host_write_bytes_to_ssd;
 			total_flash_page_programs_all_ssds += ssd_flash_page_programs;
 			total_flash_page_erases_all_ssds += ssd_flash_page_erases;
 			total_host_write_bytes_dispatched_all_ssds += host_write_bytes_to_ssd;
+			total_host_write_bytes_attributed_all_ssds += attributed_host_write_bytes_to_ssd;
 			total_flash_programmed_bytes_all_ssds += flash_programmed_bytes_to_ssd;
 
 			std::string ssd_tag = wl_tag + ".SSD";
@@ -338,6 +342,7 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 			xmlwriter.Write_attribute_string("Flash_Page_Program_Count", std::to_string(ssd_flash_page_programs));
 			xmlwriter.Write_attribute_string("Flash_Page_Erase_Count", std::to_string(ssd_flash_page_erases));
 			xmlwriter.Write_attribute_string("Host_Write_Bytes_Dispatched", std::to_string(host_write_bytes_to_ssd));
+			xmlwriter.Write_attribute_string("Logical_Host_Write_Bytes_Attributed", std::to_string(attributed_host_write_bytes_to_ssd));
 			xmlwriter.Write_attribute_string("Approx_Flash_Programmed_Bytes", std::to_string(flash_programmed_bytes_to_ssd));
 			xmlwriter.Write_attribute_string("Approx_Flash_Write_Amplification", std::to_string(approx_flash_wa));
 			xmlwriter.Write_close_tag();
@@ -364,13 +369,14 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 		uint64_t subreq_write_sectors_total = raid_controller == nullptr ? 0 : raid_controller->Get_total_subrequest_write_sectors();
 		unsigned long long host_write_bytes_total = (unsigned long long)host_write_sectors_total * (unsigned long long)SECTOR_SIZE_IN_BYTE;
 		double logical_raid_wa = host_write_sectors_total == 0 ? 0.0 : (double)subreq_write_sectors_total / (double)host_write_sectors_total;
-		double approx_flash_wa_total = total_host_write_bytes_dispatched_all_ssds == 0 ? 0.0 :
-			(double)total_flash_programmed_bytes_all_ssds / (double)total_host_write_bytes_dispatched_all_ssds;
+		double approx_flash_wa_total = total_host_write_bytes_attributed_all_ssds == 0 ? 0.0 :
+			(double)total_flash_programmed_bytes_all_ssds / (double)total_host_write_bytes_attributed_all_ssds;
 		xmlwriter.Write_attribute_string("Host_Write_Sectors", std::to_string(host_write_sectors_total));
 		xmlwriter.Write_attribute_string("SubRequest_Write_Sectors", std::to_string(subreq_write_sectors_total));
 		xmlwriter.Write_attribute_string("Logical_RAID_Write_Amplification", std::to_string(logical_raid_wa));
 		xmlwriter.Write_attribute_string("Host_Write_Bytes", std::to_string(host_write_bytes_total));
 		xmlwriter.Write_attribute_string("Host_Write_Bytes_Dispatched_To_SSDs", std::to_string(total_host_write_bytes_dispatched_all_ssds));
+		xmlwriter.Write_attribute_string("Logical_Host_Write_Bytes_Attributed_To_SSDs", std::to_string(total_host_write_bytes_attributed_all_ssds));
 		xmlwriter.Write_attribute_string("Approx_Flash_Page_Programs_All_SSDs", std::to_string(total_flash_page_programs_all_ssds));
 		xmlwriter.Write_attribute_string("Approx_Flash_Page_Erases_All_SSDs", std::to_string(total_flash_page_erases_all_ssds));
 		xmlwriter.Write_attribute_string("Approx_Flash_Programmed_Bytes_All_SSDs", std::to_string(total_flash_programmed_bytes_all_ssds));

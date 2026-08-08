@@ -61,6 +61,8 @@ public:
 	uint64_t Get_total_host_write_sectors() const;
 	uint64_t Get_total_subrequest_write_sectors() const;
 	uint64_t Get_ssd_subrequest_write_sectors(unsigned int disk_id) const;
+	uint64_t Get_total_attributed_host_write_sectors() const;
+	uint64_t Get_ssd_attributed_host_write_sectors(unsigned int disk_id) const;
 
 private:
 	struct Inflight_Entry
@@ -77,6 +79,7 @@ private:
 		SSD_Components::User_Request* Parent = nullptr;
 		unsigned int Disk_id = 0;
 		unsigned int Size_in_sectors = 0;
+		uint64_t Zone_id = std::numeric_limits<uint64_t>::max();
 		SSD_Components::UserRequestType Type = SSD_Components::UserRequestType::READ;
 		sim_time_type Submit_time = 0;
 		bool Is_background = false;
@@ -94,6 +97,7 @@ private:
 		uint64_t Completed_sectors = 0;
 		uint64_t Submitted_read_sectors = 0;
 		uint64_t Submitted_write_sectors = 0;
+		uint64_t Attributed_host_write_sectors = 0;
 		uint64_t Completed_read_sectors = 0;
 		uint64_t Completed_write_sectors = 0;
 		uint64_t Completed_read_transactions = 0;
@@ -138,6 +142,7 @@ private:
 		uint64_t State_transitions = 0;
 		uint64_t Redirect_operations = 0;
 		uint64_t Migration_operations = 0;
+		uint64_t Migration_barrier_waits = 0;
 		uint64_t Buffered_requests = 0;
 		uint64_t Buffered_write_requests = 0;
 		uint64_t Buffered_write_sectors = 0;
@@ -206,6 +211,7 @@ private:
 	std::vector<uint64_t> Collect_zone_ids(LHA_type lba, unsigned int lba_count) const;
 	bool Maybe_apply_redirect(uint64_t zone_id);
 	std::vector<RAID_Policy::MigrationTask> Build_migration_tasks(const std::vector<RAID_Policy::MigrationOp>& ops) const;
+	bool Has_inflight_user_io_on_migrating_zone() const;
 	void Schedule_swans_event(sim_time_type fire_time);
 	void Handle_swans_event();
 	void process_new_user_request(SSD_Components::User_Request* user_request) override;

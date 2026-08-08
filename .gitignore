@@ -13,11 +13,23 @@
 /runs/
 /results/
 /artifacts/
+/output/
 /traces/
+/experiments/
+/workload_trace.xml
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.trace
+*.csv
+*.tsv
+*.pcap
+*.pcapng
 *_scenario_*.xml
 *.log
 
 # Local backups and archives
+/0722/
 *.bak
 *.zip
 *.orig
@@ -35,3 +47,19 @@ __pycache__/
 *.py[cod]
 .DS_Store
 Thumbs.db
+
+# Local credentials and certificates
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+credentials*.json
+service-account*.json
+
+# Upstream RapidXML documentation is not part of the maintained source set
+/src/utils/rapidxml/manual.html

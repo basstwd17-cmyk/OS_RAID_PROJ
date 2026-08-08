@@ -306,7 +306,7 @@ Flash_Transaction_Queue *TSU_Priority_OutOfOrder::get_next_read_service_queue(NV
     }
 
     int numberOfTries = 0;
-    while(numberOfTries < IO_Flow_Priority_Class::get_scheduling_weight(IO_Flow_Priority_Class::HIGH))
+    while(numberOfTries <= IO_Flow_Priority_Class::get_scheduling_weight(IO_Flow_Priority_Class::HIGH))
     {
         nextPriorityClassRead[chip->ChannelID][chip->ChipID] = IO_Flow_Priority_Class::to_priority((nextPriorityClassRead[chip->ChannelID][chip->ChipID] + 1) % IO_Flow_Priority_Class::NUMBER_OF_PRIORITY_LEVELS);
         if (nextPriorityClassRead[chip->ChannelID][chip->ChipID] == IO_Flow_Priority_Class::URGENT)
@@ -442,7 +442,7 @@ Flash_Transaction_Queue *TSU_Priority_OutOfOrder::get_next_write_service_queue(N
     }
 
     int numberOfTries = 0;
-    while (numberOfTries < IO_Flow_Priority_Class::get_scheduling_weight(IO_Flow_Priority_Class::HIGH))
+    while (numberOfTries <= IO_Flow_Priority_Class::get_scheduling_weight(IO_Flow_Priority_Class::HIGH))
     {
         nextPriorityClassWrite[chip->ChannelID][chip->ChipID] = IO_Flow_Priority_Class::to_priority((nextPriorityClassWrite[chip->ChannelID][chip->ChipID] + 1) % IO_Flow_Priority_Class::NUMBER_OF_PRIORITY_LEVELS);
         if (nextPriorityClassWrite[chip->ChannelID][chip->ChipID] == IO_Flow_Priority_Class::URGENT)

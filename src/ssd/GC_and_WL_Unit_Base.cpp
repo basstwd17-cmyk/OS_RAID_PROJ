@@ -140,6 +140,9 @@ namespace SSD_Components
 				break;
 			}
 			case Transaction_Type::WRITE:
+				if (((NVM_Transaction_Flash_WR*)transaction)->ExecutionMode == WriteExecutionModeType::SIMPLE) {
+					block_manager->Program_transaction_serviced(transaction->Address);
+				}
 				if (pbke->Blocks[((NVM_Transaction_Flash_WR*)transaction)->RelatedErase->Address.BlockID].Holds_mapping_data) {
 					address_mapping_unit->Remove_barrier_for_accessing_mvpn(transaction->Stream_id, (MVPN_type)transaction->LPA);
 					DEBUG(Simulator->Time() << ": MVPN=" << (MVPN_type)transaction->LPA << " unlocked!!");
@@ -207,7 +210,7 @@ namespace SSD_Components
 		return dynamic_wearleveling_enabled;
 	}
 
-	inline bool GC_and_WL_Unit_Base::Use_static_wearleveling()
+	bool GC_and_WL_Unit_Base::Use_static_wearleveling()
 	{
 		return static_wearleveling_enabled;
 	}

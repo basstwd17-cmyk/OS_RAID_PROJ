@@ -43,6 +43,7 @@ namespace SSD_Components
 		plane_record->Free_pages_count--;		
 		page_address.BlockID = plane_record->GC_wf[stream_id]->BlockID;
 		page_address.PageID = plane_record->GC_wf[stream_id]->Current_page_write_index++;
+		program_transaction_issued(page_address);
 
 		
 		//The current write frontier block is written to the end
@@ -138,9 +139,7 @@ namespace SSD_Components
 		plane_record->Free_pages_count += block->Invalid_page_count;
 		plane_record->Invalid_pages_count -= block->Invalid_page_count;
 
-		Stats::Block_erase_histogram[block_address.ChannelID][block_address.ChipID][block_address.DieID][block_address.PlaneID][block->Erase_count]--;
 		block->Erase();
-		Stats::Block_erase_histogram[block_address.ChannelID][block_address.ChipID][block_address.DieID][block_address.PlaneID][block->Erase_count]++;
 		plane_record->Add_to_free_block_pool(block, gc_and_wl_unit->Use_dynamic_wearleveling());
 		plane_record->Check_bookkeeping_correctness(block_address);
 	}

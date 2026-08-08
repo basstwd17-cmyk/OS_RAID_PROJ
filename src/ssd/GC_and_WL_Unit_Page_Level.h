@@ -17,8 +17,8 @@ namespace SSD_Components
 			GC_Block_Selection_Policy_Type block_selection_policy, double gc_threshold, bool preemptible_gc_enabled, double gc_hard_threshold,
 			unsigned int channel_count, unsigned int chip_no_per_channel, unsigned int die_no_per_chip, unsigned int plane_no_per_die,
 			unsigned int block_no_per_plane, unsigned int page_no_per_block, unsigned int sectors_per_page, 
-			bool use_copyback, double rho, unsigned int max_ongoing_gc_reqs_per_plane = 10, 
-			bool dynamic_wearleveling_enabled = true, bool static_wearleveling_enabled = true, unsigned int static_wearleveling_threshold = 100, int seed = 432);
+			bool use_copyback, double rho, unsigned int max_ongoing_gc_reqs_per_plane,
+			bool dynamic_wearleveling_enabled, bool static_wearleveling_enabled, unsigned int static_wearleveling_threshold, int seed);
 
 		/*This function is used for implementing preemptible GC execution. If for a flash chip the free block
 		* pool becomes close to empty, then the GC requests for that flash chip should be prioritized and

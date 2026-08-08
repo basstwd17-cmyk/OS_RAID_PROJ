@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <set>
 #include <stdexcept>
 
 namespace RAID_Policy {
@@ -201,6 +202,32 @@ uint64_t ZoneDirectory::Zone_write_count(uint64_t zone_id) const
 {
 	Validate_zone_id(zone_id);
 	return zones[static_cast<size_t>(zone_id)].Number_of_writes;
+}
+
+uint64_t ZoneDirectory::Duplicate_physical_location_count() const
+{
+	if (!initialized) {
+		return 0;
+	}
+	std::set<std::pair<uint64_t, uint64_t>> locations;
+	uint64_t duplicates = 0;
+	for (const ZoneEntry& zone : zones) {
+		if (!locations.insert(std::make_pair(zone.Physical_ssd, zone.Physical_zone)).second) {
+			duplicates++;
+		}
+	}
+	return duplicates;
+}
+
+uint64_t ZoneDirectory::Migrating_zone_count() const
+{
+	uint64_t count = 0;
+	for (const ZoneEntry& zone : zones) {
+		if (zone.Migrating) {
+			count++;
+		}
+	}
+	return count;
 }
 
 void ZoneDirectory::Observe_write(stream_id_type stream_id, uint64_t zone_id, uint64_t zone_lba_offset, unsigned int write_sectors)

@@ -46,6 +46,8 @@ public:
 	bool Is_empty(uint64_t zone_id) const;
 	bool Is_migrating(uint64_t zone_id) const;
 	uint64_t Zone_write_count(uint64_t zone_id) const;
+	uint64_t Duplicate_physical_location_count() const;
+	uint64_t Migrating_zone_count() const;
 
 	void Observe_write(stream_id_type stream_id, uint64_t zone_id, uint64_t zone_lba_offset, unsigned int write_sectors);
 	void Observe_write(uint64_t zone_id, uint64_t zone_lba_offset, unsigned int write_sectors);

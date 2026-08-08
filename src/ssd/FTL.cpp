@@ -881,8 +881,20 @@ namespace SSD_Components
 		val = std::to_string(Stats::Total_gc_executions);
 		xmlwriter.Write_attribute_string_inline(attr, val);
 
+		attr = "Dynamic_Wearleveling_Enabled";
+		val = GC_and_WL_Unit != NULL && GC_and_WL_Unit->Use_dynamic_wearleveling() ? "true" : "false";
+		xmlwriter.Write_attribute_string_inline(attr, val);
+
+		attr = "Static_Wearleveling_Enabled";
+		val = GC_and_WL_Unit != NULL && GC_and_WL_Unit->Use_static_wearleveling() ? "true" : "false";
+		xmlwriter.Write_attribute_string_inline(attr, val);
+
 		attr = "Average_Page_Movement_For_GC";
 		val = std::to_string(double(Stats::Total_page_movements_for_gc) / double(Stats::Total_gc_executions));
+		xmlwriter.Write_attribute_string_inline(attr, val);
+
+		attr = "Total_Page_Movements_For_GC";
+		val = std::to_string(Stats::Total_page_movements_for_gc);
 		xmlwriter.Write_attribute_string_inline(attr, val);
 
 		attr = "Total_WL_Executions";
@@ -891,6 +903,10 @@ namespace SSD_Components
 
 		attr = "Average_Page_Movement_For_WL";
 		val = std::to_string(double(Stats::Total_page_movements_for_wl) / double(Stats::Total_wl_executions));
+		xmlwriter.Write_attribute_string_inline(attr, val);
+
+		attr = "Total_Page_Movements_For_WL";
+		val = std::to_string(Stats::Total_page_movements_for_wl);
 		xmlwriter.Write_attribute_string_inline(attr, val);
 
 		xmlwriter.Write_end_element_tag();

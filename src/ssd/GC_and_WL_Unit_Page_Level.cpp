@@ -53,16 +53,21 @@ namespace SSD_Components
 			switch (block_selection_policy) {
 				case SSD_Components::GC_Block_Selection_Policy_Type::GREEDY://Find the set of blocks with maximum number of invalid pages and no free pages
 				{
-					gc_candidate_block_id = 0;
-					if (pbke->Ongoing_erase_operations.find(0) != pbke->Ongoing_erase_operations.end()) {
-						gc_candidate_block_id++;
-					}
-					for (flash_block_ID_type block_id = 1; block_id < block_no_per_plane; block_id++) {
-						if (pbke->Blocks[block_id].Invalid_page_count > pbke->Blocks[gc_candidate_block_id].Invalid_page_count
-							&& pbke->Blocks[block_id].Current_page_write_index == pages_no_per_block
-							&& is_safe_gc_wl_candidate(pbke, block_id)) {
+					gc_candidate_block_id = block_no_per_plane;
+					for (flash_block_ID_type block_id = 0; block_id < block_no_per_plane; block_id++) {
+						if (pbke->Ongoing_erase_operations.find(block_id) != pbke->Ongoing_erase_operations.end()
+							|| pbke->Blocks[block_id].Current_page_write_index != pages_no_per_block
+							|| pbke->Blocks[block_id].Invalid_page_count == 0
+							|| !is_safe_gc_wl_candidate(pbke, block_id)) {
+							continue;
+						}
+						if (gc_candidate_block_id == block_no_per_plane
+							|| pbke->Blocks[block_id].Invalid_page_count > pbke->Blocks[gc_candidate_block_id].Invalid_page_count) {
 							gc_candidate_block_id = block_id;
 						}
+					}
+					if (gc_candidate_block_id == block_no_per_plane) {
+						return;
 					}
 					break;
 				}
@@ -131,7 +136,8 @@ namespace SSD_Components
 			}
 
 			//This should never happen, but we check it here for safty
-			if (pbke->Ongoing_erase_operations.find(gc_candidate_block_id) != pbke->Ongoing_erase_operations.end()) {
+			if (gc_candidate_block_id >= block_no_per_plane
+				|| pbke->Ongoing_erase_operations.find(gc_candidate_block_id) != pbke->Ongoing_erase_operations.end()) {
 				return;
 			}
 			

@@ -97,7 +97,9 @@ inline void Input_Stream_Manager_SATA::Handle_arrived_write_data(User_Request* r
 	inline void Input_Stream_Manager_SATA::Handle_serviced_request(User_Request* request)
 	{
 		((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->Waiting_user_requests.remove(request);
-		((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->On_the_fly_requests--;
+		if (!host_interface->Is_internal_submission()) {
+			((Input_Stream_SATA*)input_streams[SATA_STREAM_ID])->On_the_fly_requests--;
+		}
 
 		DEBUG("** Host Interface: Request #" << request->ID << " is finished")
 

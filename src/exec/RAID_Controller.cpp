@@ -355,6 +355,9 @@ void RAID_Controller::Observe_buffered_hot_write(const RAID_Policy::MigrationTas
 		if (resolved.Zone_id == task.Op.Hot_zone && chunk > 0) {
 			zone_directory.Observe_write(request->Stream_id, resolved.Zone_id, resolved.Zone_lba_offset, chunk);
 			wear_leveling_policy.Observe_host_write(task.Op.Cold_ssd, 1);
+			if (task.Op.Cold_ssd < per_ssd_stats.size()) {
+				per_ssd_stats[task.Op.Cold_ssd].Attributed_host_write_sectors += chunk;
+			}
 		}
 		current_lba += chunk;
 		remaining -= chunk;
@@ -408,6 +411,7 @@ void RAID_Controller::Submit(SSD_Components::User_Request* request)
 		metadata.Parent = request;
 		metadata.Disk_id = part.Disk_id;
 		metadata.Size_in_sectors = part.LBA_count;
+		metadata.Zone_id = part.Zone_id;
 		metadata.Type = sub_request->Type;
 		metadata.Submit_time = now;
 		subrequest_metadata_by_id[sub_request->ID] = metadata;
@@ -422,6 +426,7 @@ void RAID_Controller::Submit(SSD_Components::User_Request* request)
 			} else {
 				stats.Submitted_write_subrequests++;
 				stats.Submitted_write_sectors += part.LBA_count;
+				stats.Attributed_host_write_sectors += part.LBA_count;
 			}
 		}
 		submit_callback(part.Disk_id, sub_request);
@@ -542,6 +547,19 @@ std::vector<RAID_Policy::MigrationTask> RAID_Controller::Build_migration_tasks(c
 		}
 	}
 	return tasks;
+}
+
+bool RAID_Controller::Has_inflight_user_io_on_migrating_zone() const
+{
+	for (const auto& item : subrequest_metadata_by_id) {
+		const Sub_Request_Metadata& metadata = item.second;
+		if (!metadata.Is_background
+			&& metadata.Zone_id != std::numeric_limits<uint64_t>::max()
+			&& zone_directory.Is_migrating(metadata.Zone_id)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 void RAID_Controller::Notify_sub_request_completed(SSD_Components::User_Request* sub_request)
@@ -730,6 +748,13 @@ void RAID_Controller::Handle_swans_event()
 
 	sim_time_type now = Simulator->Time();
 	if (migration_executor.Has_inflight()) {
+		// Start marks both zones first. New requests are buffered, while requests
+		// dispatched before the mark drain before the first source copy begins.
+		if (Has_inflight_user_io_on_migrating_zone()) {
+			swans_stats.Migration_barrier_waits++;
+			Schedule_swans_event(now + swans_poll_interval);
+			return;
+		}
 		migration_executor.Poll(zone_directory,
 			[this](const RAID_Policy::StripeCopyPlan& copy, bool is_write, uint64_t task_index) -> io_request_id_type {
 				return this->Submit_background_copy(copy, is_write, task_index);
@@ -978,6 +1003,7 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 		xmlwriter.Write_attribute_string("Completed_Sectors", std::to_string(stats.Completed_sectors));
 		xmlwriter.Write_attribute_string("Submitted_Read_Sectors", std::to_string(stats.Submitted_read_sectors));
 		xmlwriter.Write_attribute_string("Submitted_Write_Sectors", std::to_string(stats.Submitted_write_sectors));
+		xmlwriter.Write_attribute_string("Attributed_Host_Write_Sectors", std::to_string(stats.Attributed_host_write_sectors));
 		xmlwriter.Write_attribute_string("Completed_Read_Sectors", std::to_string(stats.Completed_read_sectors));
 		xmlwriter.Write_attribute_string("Completed_Write_Sectors", std::to_string(stats.Completed_write_sectors));
 		xmlwriter.Write_attribute_string("Completed_Read_Transactions", std::to_string(stats.Completed_read_transactions));
@@ -1010,6 +1036,7 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 	xmlwriter.Write_attribute_string("SWANS_State_Transitions", std::to_string(swans_stats.State_transitions));
 	xmlwriter.Write_attribute_string("SWANS_Redirect_Operations", std::to_string(swans_stats.Redirect_operations));
 	xmlwriter.Write_attribute_string("SWANS_Migration_Operations", std::to_string(swans_stats.Migration_operations));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Barrier_Waits", std::to_string(swans_stats.Migration_barrier_waits));
 	xmlwriter.Write_attribute_string("SWANS_Migration_History_Count", std::to_string(swans_migration_history.size()));
 	xmlwriter.Write_attribute_string("SWANS_Buffered_Requests", std::to_string(swans_stats.Buffered_requests));
 	xmlwriter.Write_attribute_string("SWANS_DMH_Buffered_Write_Requests", std::to_string(swans_stats.Buffered_write_requests));
@@ -1029,6 +1056,11 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 	xmlwriter.Write_attribute_string("SWANS_Buffered_Inflight", std::to_string(migration_executor.Buffered_count()));
 	xmlwriter.Write_attribute_string("SWANS_Backpressure_Events", std::to_string(migration_executor.Backpressure_events()));
 	xmlwriter.Write_attribute_string("SWANS_Blocked_Requests", std::to_string(blocked_user_requests.size()));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Active", migration_executor.Has_inflight() ? "true" : "false");
+	xmlwriter.Write_attribute_string("SWANS_Migrating_Zones", std::to_string(zone_directory.Migrating_zone_count()));
+	xmlwriter.Write_attribute_string("SWANS_Mapping_Entries", std::to_string(zone_directory.Zone_count()));
+	xmlwriter.Write_attribute_string("SWANS_Mapping_Duplicate_Physical_Locations",
+		std::to_string(zone_directory.Duplicate_physical_location_count()));
 
 	for (size_t i = 0; i < swans_migration_history.size(); i++) {
 		const Swans_Migration_Record& record = swans_migration_history[i];
@@ -1074,4 +1106,21 @@ uint64_t RAID_Controller::Get_ssd_subrequest_write_sectors(unsigned int disk_id)
 		return 0;
 	}
 	return per_ssd_stats[disk_id].Submitted_write_sectors;
+}
+
+uint64_t RAID_Controller::Get_total_attributed_host_write_sectors() const
+{
+	uint64_t total = 0;
+	for (size_t i = 0; i < per_ssd_stats.size(); i++) {
+		total += per_ssd_stats[i].Attributed_host_write_sectors;
+	}
+	return total;
+}
+
+uint64_t RAID_Controller::Get_ssd_attributed_host_write_sectors(unsigned int disk_id) const
+{
+	if (disk_id >= per_ssd_stats.size()) {
+		return 0;
+	}
+	return per_ssd_stats[disk_id].Attributed_host_write_sectors;
 }

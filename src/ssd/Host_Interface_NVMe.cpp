@@ -118,7 +118,9 @@ inline void Input_Stream_Manager_NVMe::Handle_arrived_write_data(User_Request *r
 	{
 		stream_id_type stream_id = request->Stream_id;
 		((Input_Stream_NVMe *)input_streams[request->Stream_id])->Waiting_user_requests.remove(request);
-		((Input_Stream_NVMe *)input_streams[stream_id])->On_the_fly_requests--;
+		if (!host_interface->Is_internal_submission()) {
+			((Input_Stream_NVMe *)input_streams[stream_id])->On_the_fly_requests--;
+		}
 
 		DEBUG("** Host Interface: Request #" << request->ID << " from stream #" << request->Stream_id << " is finished")
 
