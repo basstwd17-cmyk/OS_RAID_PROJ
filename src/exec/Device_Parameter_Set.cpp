@@ -48,12 +48,15 @@ Device_Parameter_Set::Device_Parameter_Set()
 	  SWANS_Epoch_Default(40000000000ULL),
 	  SWANS_Epoch_Placement(40000000000ULL),
 	  SWANS_Epoch_Migration(40000000000ULL),
-	  SWANS_TH_Precautionary(5.0),
-	  SWANS_TH_Critical(15.0),
+	  SWANS_TH_Precautionary(5.0 * 1024.0 * 1024.0),
+	  SWANS_TH_Critical(15.0 * 1024.0 * 1024.0),
 	  SWANS_Max_Concurrent_Migrations(1),
 	  SWANS_Migration_Buffer_Limit(64),
 	  SWANS_Migration_Working_Queue_Limit(64),
-	  SWANS_Buffered_Write_Completion_Mode("DEFERRED")
+	  SWANS_Buffered_Write_Completion_Mode("DEFERRED"),
+	  Bad_Block_Retirement_Enabled(false),
+	  Simulation_Stop_Mode("FIXED"),
+	  End_of_Life_Threshold(0.05)
 {
 }
 // static -> 파라미터 멤버화
@@ -445,6 +448,18 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 	val = SWANS_Buffered_Write_Completion_Mode;
 	xmlwriter.Write_attribute_string(attr, val);
 
+	attr = "Bad_Block_Retirement_Enabled";
+	val = (Bad_Block_Retirement_Enabled ? "true" : "false");
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "Simulation_Stop_Mode";
+	val = Simulation_Stop_Mode;
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "End_of_Life_Threshold";
+	val = std::to_string(End_of_Life_Threshold);
+	xmlwriter.Write_attribute_string(attr, val);
+
 	Flash_Parameters.XML_serialize(xmlwriter);
 
 	xmlwriter.Write_close_tag();
@@ -754,6 +769,17 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 				std::string val = param->value();
 				std::transform(val.begin(), val.end(), val.begin(), ::toupper);
 				SWANS_Buffered_Write_Completion_Mode = val;
+			} else if (strcmp(param->name(), "Bad_Block_Retirement_Enabled") == 0) {
+				std::string val = param->value();
+				std::transform(val.begin(), val.end(), val.begin(), ::toupper);
+				Bad_Block_Retirement_Enabled = (val.compare("FALSE") == 0 ? false : true);
+			} else if (strcmp(param->name(), "Simulation_Stop_Mode") == 0) {
+				std::string val = param->value();
+				std::transform(val.begin(), val.end(), val.begin(), ::toupper);
+				Simulation_Stop_Mode = val;
+			} else if (strcmp(param->name(), "End_of_Life_Threshold") == 0) {
+				std::string val = param->value();
+				End_of_Life_Threshold = std::stod(val);
 			}
 			else if (strcmp(param->name(), "Flash_Parameter_Set") == 0)
 			{

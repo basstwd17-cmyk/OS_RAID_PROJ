@@ -223,6 +223,10 @@ namespace SSD_Components
 
 	bool GC_and_WL_Unit_Base::is_safe_gc_wl_candidate(const PlaneBookKeepingType* plane_record, const flash_block_ID_type gc_wl_candidate_block_id)
 	{
+		if (plane_record->Blocks[gc_wl_candidate_block_id].Is_bad) {
+			return false;
+		}
+
 		//The block shouldn't be a current write frontier
 		for (unsigned int stream_id = 0; stream_id < address_mapping_unit->Get_no_of_input_streams(); stream_id++) {
 			if ((&plane_record->Blocks[gc_wl_candidate_block_id]) == plane_record->Data_wf[stream_id]

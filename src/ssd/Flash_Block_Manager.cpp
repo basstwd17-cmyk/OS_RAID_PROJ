@@ -7,9 +7,11 @@ namespace SSD_Components
 {
 	Flash_Block_Manager::Flash_Block_Manager(GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
 		unsigned int channel_count, unsigned int chip_no_per_channel, unsigned int die_no_per_chip, unsigned int plane_no_per_die,
-		unsigned int block_no_per_plane, unsigned int page_no_per_block)
+		unsigned int block_no_per_plane, unsigned int page_no_per_block, unsigned int ssd_id, double overprovisioning_ratio,
+		bool bad_block_retirement_enabled, bool eol_stop_enabled, double end_of_life_threshold)
 		: Flash_Block_Manager_Base(gc_and_wl_unit, max_allowed_block_erase_count, total_concurrent_streams_no, channel_count, chip_no_per_channel, die_no_per_chip,
-			plane_no_per_die, block_no_per_plane, page_no_per_block)
+			plane_no_per_die, block_no_per_plane, page_no_per_block, ssd_id, overprovisioning_ratio,
+			bad_block_retirement_enabled, eol_stop_enabled, end_of_life_threshold)
 	{
 	}
 
@@ -136,10 +138,15 @@ namespace SSD_Components
 	{
 		PlaneBookKeepingType *plane_record = &plane_manager[block_address.ChannelID][block_address.ChipID][block_address.DieID][block_address.PlaneID];
 		Block_Pool_Slot_Type* block = &(plane_record->Blocks[block_address.BlockID]);
-		plane_record->Free_pages_count += block->Invalid_page_count;
 		plane_record->Invalid_pages_count -= block->Invalid_page_count;
 
 		block->Erase();
+		if (Retire_block_if_worn_out(plane_record, block)) {
+			plane_record->Total_pages_count -= pages_no_per_block;
+			plane_record->Check_bookkeeping_correctness(block_address);
+			return;
+		}
+		plane_record->Free_pages_count += pages_no_per_block;
 		plane_record->Add_to_free_block_pool(block, gc_and_wl_unit->Use_dynamic_wearleveling());
 		plane_record->Check_bookkeeping_correctness(block_address);
 	}

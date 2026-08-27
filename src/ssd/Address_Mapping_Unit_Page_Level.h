@@ -105,8 +105,8 @@ namespace SSD_Components
 		std::multimap<LPA_type, NVM_Transaction_Flash*> Waiting_unmapped_program_transactions;
 		std::multimap<MVPN_type, LPA_type> ArrivingMappingEntries;
 		std::set<MVPN_type> DepartingMappingEntries;
-			std::set<LPA_type> Locked_LPAs;//Used to manage race conditions, i.e. a user request accesses and LPA while GC is moving that LPA 
-			std::set<MVPN_type> Locked_MVPNs;//Used to manage race conditions
+			std::map<LPA_type, unsigned int> Locked_LPAs;//Used to manage race conditions, i.e. a user request accesses and LPA while GC is moving that LPA 
+			std::map<MVPN_type, unsigned int> Locked_MVPNs;//Used to manage race conditions
 			std::map<LPA_type, page_status_type> Pending_discard_masks;
 			std::multimap<LPA_type, NVM_Transaction_Flash*> Read_transactions_behind_LPA_barrier;
 		std::multimap<LPA_type, NVM_Transaction_Flash*> Write_transactions_behind_LPA_barrier;

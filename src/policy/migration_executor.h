@@ -23,6 +23,7 @@ public:
 	struct DeferredRequest {
 		SSD_Components::User_Request* Request = nullptr;
 		bool Complete_without_dispatch = false;
+		sim_time_type Enqueue_time = 0;
 	};
 
 	typedef std::function<io_request_id_type(const StripeCopyPlan&, bool is_write, uint64_t task_index)> SubmitCopyFunction;
@@ -80,6 +81,8 @@ private:
 		std::vector<StripeCopyPlan> Restore_copies;
 		std::map<stream_id_type, std::vector<RestoreBlockState>> Restore_block_states;
 		std::map<stream_id_type, std::vector<bool>> Restore_after_active_write;
+		std::map<stream_id_type, std::vector<bool>> Discarded_source_blocks;
+		std::deque<std::pair<stream_id_type, unsigned int>> Pending_source_discards;
 		size_t Next_grab = 0;
 		size_t Next_restore = 0;
 		TaskState State = TaskState::IDLE;
@@ -96,6 +99,9 @@ private:
 	void Append_restore_copy(InflightTask& task, stream_id_type stream_id, unsigned int block_offset, const ZoneDirectory& directory);
 	void Request_restore_after_dirty(InflightTask& task, stream_id_type stream_id, unsigned int block_offset, const ZoneDirectory& directory);
 	void Build_restore_copies(InflightTask& task, ZoneDirectory& directory);
+	void Discard_source_block(InflightTask& task, stream_id_type stream_id, unsigned int block_offset,
+		const DiscardFunction& discard_source, uint64_t task_index);
+	void Drain_pending_source_discards(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index);
 	void Discard_source_copies(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index);
 	void Drain_task(InflightTask& task, ZoneDirectory& directory);
 

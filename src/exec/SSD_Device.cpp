@@ -1,6 +1,7 @@
 #include <vector>
 #include <stdexcept>
 #include <ctime>
+#include <cstdlib>
 #include "SSD_Device.h"
 #include "../ssd/ONFI_Channel_Base.h"
 #include "../ssd/Flash_Block_Manager.h"
@@ -24,6 +25,11 @@ SSD_Device::SSD_Device(Device_Parameter_Set *parameters, std::vector<IO_Flow_Par
 {
 	SSD_Device *device = this;
 	Simulator->AddObject(device);
+	unsigned int ssd_id = 0;
+	const size_t separator = id.find_last_of('_');
+	if (separator != std::string::npos && separator + 1 < id.size()) {
+		ssd_id = (unsigned int)std::strtoul(id.substr(separator + 1).c_str(), nullptr, 10);
+	}
 
 	device->Preconditioning_required = parameters->Enabled_Preconditioning;
 	device->Memory_Type = parameters->Memory_Type;
@@ -185,7 +191,9 @@ SSD_Device::SSD_Device(Device_Parameter_Set *parameters, std::vector<IO_Flow_Par
 		fbm = new SSD_Components::Flash_Block_Manager(NULL, parameters->Flash_Parameters.Block_PE_Cycles_Limit,
 													  (unsigned int)io_flows->size(), parameters->Flash_Channel_Count, parameters->Chip_No_Per_Channel,
 													  parameters->Flash_Parameters.Die_No_Per_Chip, parameters->Flash_Parameters.Plane_No_Per_Die,
-													  parameters->Flash_Parameters.Block_No_Per_Plane, parameters->Flash_Parameters.Page_No_Per_Block);
+													  parameters->Flash_Parameters.Block_No_Per_Plane, parameters->Flash_Parameters.Page_No_Per_Block,
+													  ssd_id, parameters->Overprovisioning_Ratio, parameters->Bad_Block_Retirement_Enabled,
+													  parameters->Simulation_Stop_Mode == "EOL", parameters->End_of_Life_Threshold);
 		ftl->BlockManager = fbm;
 
 		//Step 7: create Address_Mapping_Unit

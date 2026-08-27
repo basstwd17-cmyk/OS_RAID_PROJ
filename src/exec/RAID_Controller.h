@@ -146,6 +146,10 @@ private:
 		uint64_t Buffered_requests = 0;
 		uint64_t Buffered_write_requests = 0;
 		uint64_t Buffered_write_sectors = 0;
+		uint64_t Migration_waiting_read_requests = 0;
+		uint64_t Migration_waiting_write_requests = 0;
+		sim_time_type Migration_total_waiting_time = 0;
+		sim_time_type Migration_max_waiting_time = 0;
 		uint64_t Replay_requests = 0;
 		uint64_t Buffered_write_completions = 0;
 		uint64_t Background_read_ios = 0;

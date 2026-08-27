@@ -5,13 +5,15 @@
 
 namespace Host_Components
 {
+std::function<void(unsigned int, unsigned int, uint64_t)> IO_Flow_Trace_Based::relay_boundary_callback;
+
 IO_Flow_Trace_Based::IO_Flow_Trace_Based(const sim_object_id_type &name, uint16_t flow_id, LHA_type start_lsa_on_device, LHA_type end_lsa_on_device, uint16_t io_queue_id,
 										 uint16_t nvme_submission_queue_size, uint16_t nvme_completion_queue_size, IO_Flow_Priority_Class::Priority priority_class, double initial_occupancy_ratio,
 										 std::string trace_file_path, Trace_Time_Unit time_unit, unsigned int total_replay_count, unsigned int percentage_to_be_simulated,
 										 HostInterface_Types SSD_device_type, PCIe_Root_Complex *pcie_root_complex, SATA_HBA *sata_hba,
 										 bool enabled_logging, sim_time_type logging_period, std::string logging_file_path) : IO_Flow_Base(name, flow_id, start_lsa_on_device, end_lsa_on_device, io_queue_id, nvme_submission_queue_size, nvme_completion_queue_size, priority_class, 0, initial_occupancy_ratio, 0, SSD_device_type, pcie_root_complex, sata_hba, enabled_logging, logging_period, logging_file_path),
 																															  trace_file_path(trace_file_path), time_unit(time_unit), total_replay_no(total_replay_count), percentage_to_be_simulated(percentage_to_be_simulated),
-																															  total_requests_in_file(0), time_offset(0)
+																															  replay_counter(0), total_requests_in_file(0), time_offset(0)
 {
 	if (percentage_to_be_simulated > 100)
 	{
@@ -22,6 +24,11 @@ IO_Flow_Trace_Based::IO_Flow_Trace_Based(const sim_object_id_type &name, uint16_
 
 IO_Flow_Trace_Based::~IO_Flow_Trace_Based()
 {
+}
+
+void IO_Flow_Trace_Based::Set_relay_boundary_callback(const std::function<void(unsigned int, unsigned int, uint64_t)>& callback)
+{
+	relay_boundary_callback = callback;
 }
 
 Host_IO_Request *IO_Flow_Trace_Based::Generate_next_request()
@@ -151,6 +158,9 @@ void IO_Flow_Trace_Based::Execute_simulator_event(MQSimEngine::Sim_Event *)
 			trace_file.close();
 			trace_file.open(trace_file_path);
 			replay_counter++;
+			if (relay_boundary_callback) {
+				relay_boundary_callback(replay_counter, total_replay_no, STAT_generated_request_count);
+			}
 			time_offset = Simulator->Time();
 			std::getline(trace_file, trace_line);
 			Utils::Helper_Functions::Remove_cr(trace_line);

@@ -13,13 +13,13 @@ public:
 	WearLevelingPolicy();
 
 	void Initialize(unsigned int ssd_count,
-		double th_precautionary,
-		double th_critical,
+		double th_precautionary_bytes,
+		double th_critical_bytes,
 		unsigned int max_concurrent_migrations);
 
-	void Observe_host_write(unsigned int ssd_id, unsigned int write_count);
+	void Observe_host_write(unsigned int ssd_id, uint64_t write_bytes);
 	void Observe_migration_write(unsigned int ssd_id, unsigned int write_sectors);
-	void Transfer_writes(unsigned int from_ssd, unsigned int to_ssd, uint64_t write_count);
+	void Transfer_writes(unsigned int from_ssd, unsigned int to_ssd, uint64_t write_bytes);
 	PolicyDecision Evaluate(const ZoneDirectory& directory);
 	bool Has_epoch_writes() const;
 
@@ -34,11 +34,11 @@ private:
 
 	bool initialized;
 	unsigned int ssd_count;
-	double th_precautionary;
-	double th_critical;
+	double th_precautionary_mib;
+	double th_critical_mib;
 	unsigned int max_concurrent_migrations;
-	std::vector<uint64_t> epoch_writes;	// recent host write activity for event scheduling
-	std::vector<uint64_t> placement_writes;	// SIT-style SSD write counts for hot/cold selection
+	std::vector<uint64_t> epoch_writes;	// recent host write bytes for event scheduling
+	std::vector<uint64_t> placement_writes;	// SIT-style SSD write bytes for hot/cold selection
 	std::vector<uint64_t> observed_host_writes;	// host writes observed by WAM; never decremented
 	std::vector<uint64_t> observed_migration_writes;	// migration restore writes; never decremented
 	double last_mu;

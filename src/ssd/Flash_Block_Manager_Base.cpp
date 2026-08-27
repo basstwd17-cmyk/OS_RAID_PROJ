@@ -1,16 +1,40 @@
 #include "Flash_Block_Manager.h"
+#include "../sim/Engine.h"
+#include <cmath>
 
 
 namespace SSD_Components
 {
 	unsigned int Block_Pool_Slot_Type::Page_vector_size = 0;
+	Flash_Block_Manager_Base::EOL_Status Flash_Block_Manager_Base::global_eol_status;
+
+	void Flash_Block_Manager_Base::Reset_EOL_status()
+	{
+		global_eol_status = EOL_Status();
+	}
+
+	Flash_Block_Manager_Base::EOL_Status Flash_Block_Manager_Base::Get_EOL_status()
+	{
+		return global_eol_status;
+	}
+
 	Flash_Block_Manager_Base::Flash_Block_Manager_Base(GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
 		unsigned int channel_count, unsigned int chip_no_per_channel, unsigned int die_no_per_chip, unsigned int plane_no_per_die,
-		unsigned int block_no_per_plane, unsigned int page_no_per_block)
+		unsigned int block_no_per_plane, unsigned int page_no_per_block, unsigned int ssd_id, double overprovisioning_ratio,
+		bool bad_block_retirement_enabled, bool eol_stop_enabled, double end_of_life_threshold)
 		: gc_and_wl_unit(gc_and_wl_unit), max_allowed_block_erase_count(max_allowed_block_erase_count), total_concurrent_streams_no(total_concurrent_streams_no),
 		channel_count(channel_count), chip_no_per_channel(chip_no_per_channel), die_no_per_chip(die_no_per_chip), plane_no_per_die(plane_no_per_die),
-		block_no_per_plane(block_no_per_plane), pages_no_per_block(page_no_per_block)
+		block_no_per_plane(block_no_per_plane), pages_no_per_block(page_no_per_block), ssd_id(ssd_id),
+		overprovisioning_ratio(overprovisioning_ratio), bad_block_retirement_enabled(bad_block_retirement_enabled),
+		eol_stop_enabled(eol_stop_enabled), end_of_life_threshold(end_of_life_threshold), bad_block_count(0)
 	{
+		total_block_count = (uint64_t)channel_count * chip_no_per_channel * die_no_per_chip * plane_no_per_die * block_no_per_plane;
+		user_block_count = overprovisioning_ratio <= 0.0
+			? total_block_count
+			: (uint64_t)std::floor((double)total_block_count / (1.0 + overprovisioning_ratio));
+		if (user_block_count > total_block_count) {
+			user_block_count = total_block_count;
+		}
 		plane_manager = new PlaneBookKeepingType***[channel_count];
 		for (unsigned int channelID = 0; channelID < channel_count; channelID++) {
 			plane_manager[channelID] = new PlaneBookKeepingType**[chip_no_per_channel];
@@ -36,6 +60,7 @@ namespace SSD_Components
 							plane_manager[channelID][chipID][dieID][planeID].Blocks[blockID].Invalid_page_count = 0;
 							plane_manager[channelID][chipID][dieID][planeID].Blocks[blockID].Erase_count = 0;
 							plane_manager[channelID][chipID][dieID][planeID].Blocks[blockID].Holds_mapping_data = false;
+							plane_manager[channelID][chipID][dieID][planeID].Blocks[blockID].Is_bad = false;
 							plane_manager[channelID][chipID][dieID][planeID].Blocks[blockID].Has_ongoing_gc_wl = false;
 							plane_manager[channelID][chipID][dieID][planeID].Blocks[blockID].Erase_transaction = NULL;
 							plane_manager[channelID][chipID][dieID][planeID].Blocks[blockID].Ongoing_user_program_count = 0;
@@ -105,10 +130,16 @@ namespace SSD_Components
 	Block_Pool_Slot_Type* PlaneBookKeepingType::Get_a_free_block(stream_id_type stream_id, bool for_mapping_data)
 	{
 		Block_Pool_Slot_Type* new_block = NULL;
-		new_block = (*Free_block_pool.begin()).second;//Assign a new write frontier block
 		if (Free_block_pool.size() == 0) {
-			PRINT_ERROR("Requesting a free block from an empty pool!")
+			PRINT_ERROR("Requesting a free block from an empty pool! stream_id=" << stream_id
+				<< " for_mapping_data=" << for_mapping_data
+				<< " Free_pages_count=" << Free_pages_count
+				<< " Valid_pages_count=" << Valid_pages_count
+				<< " Invalid_pages_count=" << Invalid_pages_count
+				<< " Total_pages_count=" << Total_pages_count
+				<< " Ongoing_erase_operations=" << Ongoing_erase_operations.size())
 		}
+		new_block = (*Free_block_pool.begin()).second;//Assign a new write frontier block
 		Free_block_pool.erase(Free_block_pool.begin());
 		new_block->Stream_id = stream_id;
 		new_block->Holds_mapping_data = for_mapping_data;
@@ -134,6 +165,9 @@ namespace SSD_Components
 
 	void PlaneBookKeepingType::Add_to_free_block_pool(Block_Pool_Slot_Type* block, bool consider_dynamic_wl)
 	{
+		if (block->Is_bad) {
+			return;
+		}
 		if (consider_dynamic_wl) {
 			std::pair<unsigned int, Block_Pool_Slot_Type*> entry(block->Erase_count, block);
 			Free_block_pool.insert(entry);
@@ -240,5 +274,54 @@ namespace SSD_Components
 			return true;
 		}
 		return false;
+	}
+
+	uint64_t Flash_Block_Manager_Base::Get_remaining_usable_block_count() const
+	{
+		return total_block_count > bad_block_count ? total_block_count - bad_block_count : 0;
+	}
+
+	double Flash_Block_Manager_Base::Get_current_effective_op_ratio() const
+	{
+		if (user_block_count == 0) {
+			return 0.0;
+		}
+		const uint64_t usable_blocks = Get_remaining_usable_block_count();
+		if (usable_blocks <= user_block_count) {
+			return 0.0;
+		}
+		return (double)(usable_blocks - user_block_count) / (double)user_block_count;
+	}
+
+	bool Flash_Block_Manager_Base::Retire_block_if_worn_out(PlaneBookKeepingType*, Block_Pool_Slot_Type* block)
+	{
+		if (!bad_block_retirement_enabled || block == nullptr || block->Is_bad || max_allowed_block_erase_count == 0) {
+			return false;
+		}
+		if (block->Erase_count < max_allowed_block_erase_count) {
+			return false;
+		}
+		block->Is_bad = true;
+		bad_block_count++;
+		Check_end_of_life();
+		return true;
+	}
+
+	void Flash_Block_Manager_Base::Check_end_of_life()
+	{
+		if (!eol_stop_enabled || global_eol_status.Triggered) {
+			return;
+		}
+		const double effective_op = Get_current_effective_op_ratio();
+		if (effective_op > end_of_life_threshold) {
+			return;
+		}
+		global_eol_status.Triggered = true;
+		global_eol_status.SSD_id = ssd_id;
+		global_eol_status.Time = Simulator->Time();
+		global_eol_status.Bad_block_count = bad_block_count;
+		global_eol_status.Remaining_usable_blocks = Get_remaining_usable_block_count();
+		global_eol_status.Effective_OP_ratio = effective_op;
+		Simulator->Stop_simulation();
 	}
 }

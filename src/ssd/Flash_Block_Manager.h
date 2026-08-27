@@ -13,7 +13,8 @@ namespace SSD_Components
 	public:
 		Flash_Block_Manager(GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
 			unsigned int channel_count, unsigned int chip_no_per_channel, unsigned int die_no_per_chip, unsigned int plane_no_per_die,
-			unsigned int block_no_per_plane, unsigned int page_no_per_block);
+			unsigned int block_no_per_plane, unsigned int page_no_per_block, unsigned int ssd_id, double overprovisioning_ratio,
+			bool bad_block_retirement_enabled, bool eol_stop_enabled, double end_of_life_threshold);
 		~Flash_Block_Manager();
 		void Allocate_block_and_page_in_plane_for_user_write(const stream_id_type stream_id, NVM::FlashMemory::Physical_Page_Address& address);
 		void Allocate_block_and_page_in_plane_for_gc_write(const stream_id_type stream_id, NVM::FlashMemory::Physical_Page_Address& address);

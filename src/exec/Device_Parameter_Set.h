@@ -1,4 +1,4 @@
-#ifndef DEVICE_PARAMETER_SET_H
+﻿#ifndef DEVICE_PARAMETER_SET_H
 #define DEVICE_PARAMETER_SET_H
 
 #include "../ssd/SSD_Defs.h"
@@ -14,7 +14,7 @@
 #include "Flash_Parameter_Set.h"
 #include <string>
 
-// RAID 파라미터 멤버화
+// RAID parameters
 class Device_Parameter_Set : public Parameter_Set_Base
 {
 public:
@@ -73,6 +73,9 @@ public:
 	unsigned int SWANS_Migration_Buffer_Limit;
 	unsigned int SWANS_Migration_Working_Queue_Limit;
 	std::string SWANS_Buffered_Write_Completion_Mode;
+	bool Bad_Block_Retirement_Enabled;
+	std::string Simulation_Stop_Mode;
+	double End_of_Life_Threshold;
 	void XML_serialize(Utils::XmlWriter& xmlwriter);
 	void XML_deserialize(rapidxml::xml_node<> *node);
 };

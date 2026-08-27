@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include "../sim/Engine.h"
 
 namespace RAID_Policy {
 
@@ -70,6 +71,7 @@ void MigrationExecutor::Start(const std::vector<MigrationTask>& tasks, ZoneDirec
 			const stream_id_type stream_id = tasks[i].Copies[copy_index].Stream_id;
 			ensure_block_bitmap(item.Buffer.Grabbed_blocks, stream_id, static_cast<size_t>(block_count));
 			ensure_block_bitmap(item.Buffer.Dirty_blocks, stream_id, static_cast<size_t>(block_count));
+			ensure_block_bitmap(item.Discarded_source_blocks, stream_id, static_cast<size_t>(block_count));
 			item.Restore_block_states[stream_id].assign(static_cast<size_t>(block_count), RestoreBlockState::NOT_SCHEDULED);
 			item.Restore_after_active_write[stream_id].assign(static_cast<size_t>(block_count), false);
 		}
@@ -183,6 +185,7 @@ MigrationExecutor::InterceptResult MigrationExecutor::Maybe_intercept(SSD_Compon
 		DeferredRequest deferred;
 		deferred.Request = request;
 		deferred.Complete_without_dispatch = false;
+		deferred.Enqueue_time = Simulator->Time();
 		if (request->Type == SSD_Components::UserRequestType::WRITE && Hits_zone(task.Task.Op.Hot_zone, request_zone_ids)) {
 			Mark_dirty_blocks(task, request, directory);
 			deferred.Complete_without_dispatch = Hits_only_zone(task.Task.Op.Hot_zone, request_zone_ids);
@@ -224,6 +227,7 @@ bool MigrationExecutor::Notify_request_completed(io_request_id_type request_id, 
 					Append_restore_copy(task, task.Active_stream_id, task.Active_block_offset, directory);
 				} else {
 					restore_states[task.Active_block_offset] = RestoreBlockState::COMPLETED;
+					task.Pending_source_discards.push_back(std::make_pair(task.Active_stream_id, task.Active_block_offset));
 				}
 			}
 			task.Next_restore++;
@@ -344,6 +348,42 @@ void MigrationExecutor::Drain_task(InflightTask& task, ZoneDirectory& directory)
 	}
 }
 
+void MigrationExecutor::Discard_source_block(InflightTask& task, stream_id_type stream_id, unsigned int block_offset,
+	const DiscardFunction& discard_source, uint64_t task_index)
+{
+	if (!discard_source) {
+		return;
+	}
+	std::vector<bool>& discarded = task.Discarded_source_blocks[stream_id];
+	if (block_offset >= discarded.size()) {
+		discarded.resize(static_cast<size_t>(block_offset) + 1, false);
+	}
+	if (discarded[block_offset]) {
+		return;
+	}
+	for (size_t i = 0; i < task.Task.Copies.size(); i++) {
+		const StripeCopyPlan& copy = task.Task.Copies[i];
+		if (copy.Stream_id != stream_id || copy.Stripe_offset != block_offset || copy.Lba_count == 0) {
+			continue;
+		}
+		if (discard_source(copy, task_index)) {
+			discarded[block_offset] = true;
+			discarded_source_blocks++;
+			discarded_source_sectors += copy.Lba_count;
+		}
+		return;
+	}
+}
+
+void MigrationExecutor::Drain_pending_source_discards(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index)
+{
+	while (!task.Pending_source_discards.empty()) {
+		std::pair<stream_id_type, unsigned int> item = task.Pending_source_discards.front();
+		task.Pending_source_discards.pop_front();
+		Discard_source_block(task, item.first, item.second, discard_source, task_index);
+	}
+}
+
 void MigrationExecutor::Discard_source_copies(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index)
 {
 	if (!discard_source) {
@@ -351,13 +391,7 @@ void MigrationExecutor::Discard_source_copies(InflightTask& task, const DiscardF
 	}
 	for (size_t i = 0; i < task.Task.Copies.size(); i++) {
 		const StripeCopyPlan& copy = task.Task.Copies[i];
-		if (copy.Lba_count == 0) {
-			continue;
-		}
-		if (discard_source(copy, task_index)) {
-			discarded_source_blocks++;
-			discarded_source_sectors += copy.Lba_count;
-		}
+		Discard_source_block(task, copy.Stream_id, copy.Stripe_offset, discard_source, task_index);
 	}
 }
 
@@ -368,6 +402,7 @@ void MigrationExecutor::Poll(ZoneDirectory& directory,
 {
 	for (size_t i = 0; i < inflight.size(); i++) {
 		InflightTask& task = inflight[i];
+		Drain_pending_source_discards(task, discard_source, i);
 		bool advance_without_io = true;
 		while (advance_without_io) {
 			advance_without_io = false;

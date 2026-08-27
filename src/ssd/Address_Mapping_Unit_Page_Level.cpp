@@ -1872,20 +1872,12 @@ namespace SSD_Components
 
 	inline void Address_Mapping_Unit_Page_Level::Set_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa)
 	{
-		auto itr = domains[stream_id]->Locked_LPAs.find(lpa);
-		if (itr != domains[stream_id]->Locked_LPAs.end()) {
-			PRINT_ERROR("Illegal operation: Locking an LPA that has already been locked!");
-		}
-		domains[stream_id]->Locked_LPAs.insert(lpa);
+		domains[stream_id]->Locked_LPAs[lpa]++;
 	}
 
 	inline void Address_Mapping_Unit_Page_Level::Set_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mvpn)
 	{
-		auto itr = domains[stream_id]->Locked_MVPNs.find(mvpn);
-		if (itr != domains[stream_id]->Locked_MVPNs.end()) {
-			PRINT_ERROR("Illegal operation: Locking an MVPN that has already been locked!");
-		}
-		domains[stream_id]->Locked_MVPNs.insert(mvpn);
+		domains[stream_id]->Locked_MVPNs[mvpn]++;
 	}
 
 	inline void Address_Mapping_Unit_Page_Level::Set_barrier_for_accessing_physical_block(const NVM::FlashMemory::Physical_Page_Address& block_address)
@@ -1921,7 +1913,16 @@ namespace SSD_Components
 	{
 		auto itr = domains[stream_id]->Locked_LPAs.find(lpa);
 		if (itr == domains[stream_id]->Locked_LPAs.end()) {
-			PRINT_ERROR("Illegal operation: Unlocking an LPA that has not been locked!");
+			PRINT_ERROR("Illegal operation: Unlocking an LPA that has not been locked! stream_id=" << stream_id
+				<< " lpa=" << lpa
+				<< " locked_lpa_count=" << domains[stream_id]->Locked_LPAs.size()
+				<< " waiting_reads=" << domains[stream_id]->Read_transactions_behind_LPA_barrier.count(lpa)
+				<< " waiting_writes=" << domains[stream_id]->Write_transactions_behind_LPA_barrier.count(lpa)
+				<< " pending_discard=" << (domains[stream_id]->Pending_discard_masks.find(lpa) != domains[stream_id]->Pending_discard_masks.end()))
+		}
+		if (itr->second > 1) {
+			itr->second--;
+			return;
 		}
 		domains[stream_id]->Locked_LPAs.erase(itr);
 
@@ -1960,6 +1961,10 @@ namespace SSD_Components
 		auto itr = domains[stream_id]->Locked_MVPNs.find(mvpn);
 		if (itr == domains[stream_id]->Locked_MVPNs.end()) {
 			PRINT_ERROR("Illegal operation: Unlocking an MVPN that has not been locked!");
+		}
+		if (itr->second > 1) {
+			itr->second--;
+			return;
 		}
 		domains[stream_id]->Locked_MVPNs.erase(itr);
 

@@ -8,8 +8,8 @@ namespace RAID_Policy {
 WearLevelingPolicy::WearLevelingPolicy()
 	: initialized(false),
 	  ssd_count(0),
-	  th_precautionary(0.0),
-	  th_critical(0.0),
+	  th_precautionary_mib(0.0),
+	  th_critical_mib(0.0),
 	  max_concurrent_migrations(1),
 	  last_mu(0.0),
 	  current_state(PolicyState::NORMAL)
@@ -17,13 +17,14 @@ WearLevelingPolicy::WearLevelingPolicy()
 }
 
 void WearLevelingPolicy::Initialize(unsigned int ssd_count,
-	double th_precautionary,
-	double th_critical,
+	double th_precautionary_bytes,
+	double th_critical_bytes,
 	unsigned int max_concurrent_migrations)
 {
 	this->ssd_count = ssd_count;
-	this->th_precautionary = th_precautionary;
-	this->th_critical = th_critical;
+	const double mib = 1024.0 * 1024.0;
+	this->th_precautionary_mib = th_precautionary_bytes / mib;
+	this->th_critical_mib = th_critical_bytes / mib;
 	this->max_concurrent_migrations = max_concurrent_migrations == 0 ? 1 : max_concurrent_migrations;
 	epoch_writes.assign(ssd_count, 0);
 	placement_writes.assign(ssd_count, 0);
@@ -34,14 +35,14 @@ void WearLevelingPolicy::Initialize(unsigned int ssd_count,
 	initialized = true;
 }
 
-void WearLevelingPolicy::Observe_host_write(unsigned int ssd_id, unsigned int write_count)
+void WearLevelingPolicy::Observe_host_write(unsigned int ssd_id, uint64_t write_bytes)
 {
 	if (!initialized || ssd_id >= epoch_writes.size()) {
 		return;
 	}
-	epoch_writes[ssd_id] += write_count;
-	placement_writes[ssd_id] += write_count;
-	observed_host_writes[ssd_id] += write_count;
+	epoch_writes[ssd_id] += write_bytes;
+	placement_writes[ssd_id] += write_bytes;
+	observed_host_writes[ssd_id] += write_bytes;
 }
 
 void WearLevelingPolicy::Observe_migration_write(unsigned int ssd_id, unsigned int write_sectors)
@@ -52,15 +53,15 @@ void WearLevelingPolicy::Observe_migration_write(unsigned int ssd_id, unsigned i
 	observed_migration_writes[ssd_id] += write_sectors;
 }
 
-void WearLevelingPolicy::Transfer_writes(unsigned int from_ssd, unsigned int to_ssd, uint64_t write_count)
+void WearLevelingPolicy::Transfer_writes(unsigned int from_ssd, unsigned int to_ssd, uint64_t write_bytes)
 {
-	if (!initialized || from_ssd >= placement_writes.size() || to_ssd >= placement_writes.size() || write_count == 0) {
+	if (!initialized || from_ssd >= placement_writes.size() || to_ssd >= placement_writes.size() || write_bytes == 0) {
 		return;
 	}
-	placement_writes[from_ssd] = placement_writes[from_ssd] > write_count
-		? placement_writes[from_ssd] - write_count
+	placement_writes[from_ssd] = placement_writes[from_ssd] > write_bytes
+		? placement_writes[from_ssd] - write_bytes
 		: 0;
-	placement_writes[to_ssd] += write_count;
+	placement_writes[to_ssd] += write_bytes;
 }
 
 bool WearLevelingPolicy::Has_epoch_writes() const
@@ -75,25 +76,25 @@ bool WearLevelingPolicy::Has_epoch_writes() const
 	}
 	return false;
 }
-// SIT-style cumulative write-request share imbalance. Unit: percentage points.
+// SIT-style cumulative write-byte imbalance. Unit: MiB to keep threshold comparisons numerically stable.
 double WearLevelingPolicy::Compute_stddev() const
 {
 	if (!initialized || ssd_count == 0) {
 		return 0.0;
 	}
-	uint64_t total = 0;
+	double total = 0.0;
 	for (unsigned int i = 0; i < ssd_count; i++) {
-		total += placement_writes[i];
+		total += (double)placement_writes[i] / (1024.0 * 1024.0);
 	}
 	if (total == 0) {
 		return 0.0;
 	}
 
-	const double mean_share = 100.0 / (double)ssd_count;
+	const double mean = total / (double)ssd_count;
 	double variance = 0.0;
 	for (unsigned int i = 0; i < ssd_count; i++) {
-		const double share = 100.0 * (double)placement_writes[i] / (double)total;
-		const double diff = share - mean_share;
+		const double write_mib = (double)placement_writes[i] / (1024.0 * 1024.0);
+		const double diff = write_mib - mean;
 		variance += diff * diff;
 	}
 	variance /= (double)ssd_count;
@@ -157,14 +158,14 @@ PolicyDecision WearLevelingPolicy::Evaluate(const ZoneDirectory& directory)
 		return decision;
 	}
 
-	if (decision.Mu < th_precautionary) {	// ->NORMAL
+	if (decision.Mu < th_precautionary_mib) {	// ->NORMAL
 		decision.State = PolicyState::NORMAL;
 		current_state = decision.State;
 		Reset_epoch();
 		return decision;
 	}
 
-	if (decision.Mu < th_critical) {	// -> REDIRECT + Redirect.Vaild=true + hot/cold SSD 세팅
+	if (decision.Mu < th_critical_mib) {	// -> REDIRECT + Redirect.Vaild=true + hot/cold SSD 세팅
 		decision.State = PolicyState::REDIRECT;
 		decision.Redirect.Valid = true;
 		decision.Redirect.Hot_ssd = hot_ssd;

@@ -4,6 +4,7 @@
 #include <string>
 #include <iostream>
 #include <fstream>
+#include <functional>
 #include "IO_Flow_Base.h"
 #include "ASCII_Trace_Definition.h"
 
@@ -27,8 +28,10 @@ public:
 	void Get_statistics(Utils::Workload_Statistics &stats,
 						const std::function<LPA_type(LHA_type lha)>& Convert_host_logical_address_to_device_address,
 						const std::function<page_status_type(LHA_type lha)>& Find_NVM_subunit_access_bitmap);
+	static void Set_relay_boundary_callback(const std::function<void(unsigned int, unsigned int, uint64_t)>& callback);
 
 private:
+	static std::function<void(unsigned int, unsigned int, uint64_t)> relay_boundary_callback;
 	Trace_Time_Unit time_unit;
 	unsigned int percentage_to_be_simulated;
 	std::string trace_file_path;

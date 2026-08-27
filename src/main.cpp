@@ -299,8 +299,13 @@ int main(int argc, char* argv[])
 		{
 			Host_System host(&exec_params->Host_Configuration, exec_params->SSD_Device_Configuration.Enabled_Preconditioning, raid_device->Get_host_interface());
 			host.Attach_storage_device(raid_device);
+			Host_Components::IO_Flow_Trace_Based::Set_relay_boundary_callback(
+				[raid_device](unsigned int relay_index, unsigned int relay_count, uint64_t cumulative_host_requests) {
+					raid_device->Print_relay_boundary_status(relay_index, relay_count, cumulative_host_requests);
+				});
 
 			Simulator->Start_simulation(); // 시뮬레이션 시작
+			Host_Components::IO_Flow_Trace_Based::Set_relay_boundary_callback(nullptr);
 
 			time_t end_time = time(0);
 			dt = ctime(&end_time);

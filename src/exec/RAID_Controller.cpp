@@ -240,7 +240,7 @@ std::vector<RAID_Sub_Request> RAID_Controller::Split(LHA_type lba, unsigned int 
 
 			if (type == SSD_Components::UserRequestType::WRITE) {
 				zone_directory.Observe_write(stream_id, zone_id, resolved.Zone_lba_offset, chunk);
-				wear_leveling_policy.Observe_host_write(resolved.Disk_id, 1);
+				wear_leveling_policy.Observe_host_write(resolved.Disk_id, (uint64_t)chunk * SECTOR_SIZE_IN_BYTE);
 			}
 
 			parts.push_back({ resolved.Disk_id, resolved.Local_lba, chunk, zone_id, resolved.Stripe_offset });
@@ -354,7 +354,7 @@ void RAID_Controller::Observe_buffered_hot_write(const RAID_Policy::MigrationTas
 		const unsigned int chunk = Swans_mapping_chunk_length(resolved, remaining);
 		if (resolved.Zone_id == task.Op.Hot_zone && chunk > 0) {
 			zone_directory.Observe_write(request->Stream_id, resolved.Zone_id, resolved.Zone_lba_offset, chunk);
-			wear_leveling_policy.Observe_host_write(task.Op.Cold_ssd, 1);
+			wear_leveling_policy.Observe_host_write(task.Op.Cold_ssd, (uint64_t)chunk * SECTOR_SIZE_IN_BYTE);
 			if (task.Op.Cold_ssd < per_ssd_stats.size()) {
 				per_ssd_stats[task.Op.Cold_ssd].Attributed_host_write_sectors += chunk;
 			}
@@ -769,6 +769,16 @@ void RAID_Controller::Handle_swans_event()
 		std::vector<RAID_Policy::MigrationExecutor::DeferredRequest> replay = migration_executor.Drain_replay_requests();
 		for (size_t i = 0; i < replay.size(); i++) {
 			swans_stats.Replay_requests++;
+			const sim_time_type wait_time = now >= replay[i].Enqueue_time ? now - replay[i].Enqueue_time : 0;
+			swans_stats.Migration_total_waiting_time += wait_time;
+			if (wait_time > swans_stats.Migration_max_waiting_time) {
+				swans_stats.Migration_max_waiting_time = wait_time;
+			}
+			if (replay[i].Request != nullptr && replay[i].Request->Type == SSD_Components::UserRequestType::READ) {
+				swans_stats.Migration_waiting_read_requests++;
+			} else {
+				swans_stats.Migration_waiting_write_requests++;
+			}
 			if (replay[i].Complete_without_dispatch) {
 				swans_stats.Buffered_write_completions++;
 				Complete_buffered_user_request(replay[i].Request);
@@ -1041,6 +1051,13 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 	xmlwriter.Write_attribute_string("SWANS_Buffered_Requests", std::to_string(swans_stats.Buffered_requests));
 	xmlwriter.Write_attribute_string("SWANS_DMH_Buffered_Write_Requests", std::to_string(swans_stats.Buffered_write_requests));
 	xmlwriter.Write_attribute_string("SWANS_DMH_Buffered_Write_Sectors", std::to_string(swans_stats.Buffered_write_sectors));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Waiting_Read_Requests", std::to_string(swans_stats.Migration_waiting_read_requests));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Waiting_Write_Requests", std::to_string(swans_stats.Migration_waiting_write_requests));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Total_Waiting_Time_us", std::to_string(to_us(swans_stats.Migration_total_waiting_time)));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Average_Waiting_Time_us",
+		std::to_string((swans_stats.Migration_waiting_read_requests + swans_stats.Migration_waiting_write_requests) == 0 ? 0.0 :
+			to_us(swans_stats.Migration_total_waiting_time) / (double)(swans_stats.Migration_waiting_read_requests + swans_stats.Migration_waiting_write_requests)));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Max_Waiting_Time_us", std::to_string(to_us(swans_stats.Migration_max_waiting_time)));
 	xmlwriter.Write_attribute_string("SWANS_Replay_Requests", std::to_string(swans_stats.Replay_requests));
 	xmlwriter.Write_attribute_string("SWANS_Buffered_Write_Completions", std::to_string(swans_stats.Buffered_write_completions));
 	xmlwriter.Write_attribute_string("SWANS_Background_Read_IOs", std::to_string(swans_stats.Background_read_ios));

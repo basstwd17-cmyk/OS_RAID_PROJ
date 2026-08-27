@@ -7,6 +7,7 @@
 #include "../ssd/Host_Interface_NVMe.h"
 #include "../ssd/Host_Interface_SATA.h"
 #include "../ssd/FTL.h"
+#include "../ssd/Flash_Block_Manager.h"
 #include "../ssd/ONFI_Channel_Base.h"
 #include "../utils/Logical_Address_Partitioning_Unit.h"
 #include "../nvm_chip/flash_memory/Physical_Page_Address.h"
@@ -68,6 +69,7 @@ namespace {
 RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_Parameter_Set*>* io_flows)
 	: MQSimEngine::Sim_Object("RAIDDevice")
 {
+	SSD_Components::Flash_Block_Manager_Base::Reset_EOL_status();
 	Simulator->AddObject(this);
 	ssd_count = parameters->SSD_Count > 0 ? parameters->SSD_Count : 1;  // SSD 개수 저장
 	stripe_unit_lba = parameters->Stripe_Unit_LBA;  // 스트라이프 크기 저장
@@ -224,6 +226,47 @@ void RAID_Device::Execute_simulator_event(MQSimEngine::Sim_Event* event)
 {
 }
 
+void RAID_Device::Print_relay_boundary_status(unsigned int relay_index, unsigned int relay_count, uint64_t cumulative_host_requests) const
+{
+	PRINT_MESSAGE("[Relay Boundary] completed relay " << relay_index << " of " << relay_count
+		<< ", cumulative host requests=" << cumulative_host_requests)
+	for (unsigned int ssd_idx = 0; ssd_idx < ssds.size(); ssd_idx++) {
+		SSD_Device* ssd = ssds[ssd_idx];
+		if (ssd == nullptr || ssd->Memory_Type != NVM::NVM_Type::FLASH || ssd->Firmware == nullptr) {
+			continue;
+		}
+		SSD_Components::FTL* ftl = static_cast<SSD_Components::FTL*>(ssd->Firmware);
+		if (ftl->BlockManager == nullptr) {
+			continue;
+		}
+
+		Erase_Distribution_Summary ssd_summary;
+		const Device_Parameter_Set& cfg = ssd_configs[ssd_idx];
+		for (unsigned int ch = 0; ch < ssd->Channel_count; ch++) {
+			for (unsigned int chip = 0; chip < ssd->Chip_no_per_channel; chip++) {
+				for (unsigned int die = 0; die < cfg.Flash_Parameters.Die_No_Per_Chip; die++) {
+					for (unsigned int plane = 0; plane < cfg.Flash_Parameters.Plane_No_Per_Die; plane++) {
+						NVM::FlashMemory::Physical_Page_Address plane_address(ch, chip, die, plane, 0, 0);
+						SSD_Components::PlaneBookKeepingType* pbke = ftl->BlockManager->Get_plane_bookkeeping_entry(plane_address);
+						if (pbke == nullptr || pbke->Blocks == nullptr) {
+							continue;
+						}
+						for (unsigned int block = 0; block < cfg.Flash_Parameters.Block_No_Per_Plane; block++) {
+							update_erase_summary(ssd_summary, pbke->Blocks[block].Erase_count);
+						}
+					}
+				}
+			}
+		}
+
+		PRINT_MESSAGE("[Relay Boundary] SSD" << ssd_idx
+			<< " Bad_Block_Count=" << ftl->BlockManager->Get_bad_block_count()
+			<< " Total_Erase_Count=" << ssd_summary.Sum_erase_count
+			<< " Max_Block_Erase_Count=" << ssd_summary.Max_erase_count
+			<< " Current_Effective_OP_Ratio=" << ftl->BlockManager->Get_current_effective_op_ratio())
+	}
+}
+
 void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWriter& xmlwriter) // Host_interface와 각 SSD들의 결과를 XML로 저장
 {
 	std::string tmp = name_prefix.empty() ? ID() : name_prefix + ".RAIDDevice";
@@ -233,6 +276,19 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 	}
 	if (raid_controller != nullptr) {
 		raid_controller->Report_results_in_XML(tmp, xmlwriter);
+	}
+	{
+		SSD_Components::Flash_Block_Manager_Base::EOL_Status eol_status =
+			SSD_Components::Flash_Block_Manager_Base::Get_EOL_status();
+		std::string eol_tag = tmp + ".EndOfLife";
+		xmlwriter.Write_open_tag(eol_tag);
+		xmlwriter.Write_attribute_string("EOL_Triggered", eol_status.Triggered ? "true" : "false");
+		xmlwriter.Write_attribute_string("First_EOL_SSD_ID", std::to_string(eol_status.SSD_id));
+		xmlwriter.Write_attribute_string("EOL_Time", std::to_string(eol_status.Time));
+		xmlwriter.Write_attribute_string("EOL_Bad_Block_Count", std::to_string(eol_status.Bad_block_count));
+		xmlwriter.Write_attribute_string("EOL_Remaining_Usable_Blocks", std::to_string(eol_status.Remaining_usable_blocks));
+		xmlwriter.Write_attribute_string("EOL_Effective_OP_Ratio", std::to_string(eol_status.Effective_OP_ratio));
+		xmlwriter.Write_close_tag();
 	}
 	{
 		std::string wl_tag = tmp + ".WearLeveling";
@@ -332,10 +388,15 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 			xmlwriter.Write_attribute_string("SSD_ID", std::to_string(ssd_idx));
 			xmlwriter.Write_attribute_string("Plane_Count", std::to_string(plane_count));
 			xmlwriter.Write_attribute_string("Block_Count", std::to_string(ssd_summary.Block_count));
+			xmlwriter.Write_attribute_string("Total_Block_Count", std::to_string(ftl->BlockManager->Get_total_block_count()));
+			xmlwriter.Write_attribute_string("Bad_Block_Count", std::to_string(ftl->BlockManager->Get_bad_block_count()));
+			xmlwriter.Write_attribute_string("Remaining_Usable_Blocks", std::to_string(ftl->BlockManager->Get_remaining_usable_block_count()));
+			xmlwriter.Write_attribute_string("Current_Effective_OP_Ratio", std::to_string(ftl->BlockManager->Get_current_effective_op_ratio()));
 			xmlwriter.Write_attribute_string("Min_Block_Erase_Count", std::to_string(erase_min_or_zero(ssd_summary)));
 			xmlwriter.Write_attribute_string("Max_Block_Erase_Count", std::to_string(ssd_summary.Max_erase_count));
 			xmlwriter.Write_attribute_string("Avg_Block_Erase_Count", std::to_string(erase_avg(ssd_summary)));
 			xmlwriter.Write_attribute_string("StdDev_Block_Erase_Count", std::to_string(erase_stddev(ssd_summary)));
+			xmlwriter.Write_attribute_string("Total_Block_Erase_Count", std::to_string(ssd_summary.Sum_erase_count));
 			xmlwriter.Write_attribute_string("Erase_Count_Spread", std::to_string(ssd_summary.Block_count == 0 ? 0 : (ssd_summary.Max_erase_count - erase_min_or_zero(ssd_summary))));
 			xmlwriter.Write_attribute_string("Worst_Plane_Erase_Spread", std::to_string(worst_plane_spread));
 			xmlwriter.Write_attribute_string("Average_Plane_Erase_Spread", std::to_string(plane_count == 0 ? 0.0 : sum_plane_spread / (double)plane_count));

@@ -74,12 +74,16 @@ namespace SSD_Components
 				case SSD_Components::GC_Block_Selection_Policy_Type::RGA:
 				{
 					std::set<flash_block_ID_type> random_set;
-					while (random_set.size() < rga_set_size) {
+					unsigned int repeat = 0;
+					while (random_set.size() < rga_set_size && repeat++ < block_no_per_plane * 2) {
 						flash_block_ID_type block_id = random_generator.Uniform_uint(0, block_no_per_plane - 1);
 						if (pbke->Ongoing_erase_operations.find(block_id) == pbke->Ongoing_erase_operations.end()
 							&& is_safe_gc_wl_candidate(pbke, block_id)) {
 							random_set.insert(block_id);
 							}
+					}
+					if (random_set.empty()) {
+						return;
 					}
 					gc_candidate_block_id = *random_set.begin();
 					for(auto &block_id : random_set) {
@@ -137,7 +141,8 @@ namespace SSD_Components
 
 			//This should never happen, but we check it here for safty
 			if (gc_candidate_block_id >= block_no_per_plane
-				|| pbke->Ongoing_erase_operations.find(gc_candidate_block_id) != pbke->Ongoing_erase_operations.end()) {
+				|| pbke->Ongoing_erase_operations.find(gc_candidate_block_id) != pbke->Ongoing_erase_operations.end()
+				|| !is_safe_gc_wl_candidate(pbke, gc_candidate_block_id)) {
 				return;
 			}
 			

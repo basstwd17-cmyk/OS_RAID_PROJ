@@ -244,7 +244,7 @@ void ZoneDirectory::Observe_write(stream_id_type stream_id, uint64_t zone_id, ui
 		throw std::out_of_range("ZoneDirectory observe write range out of zone bounds");
 	}
 	ZoneEntry& zone = zones[static_cast<size_t>(zone_id)];
-	zone.Number_of_writes++;
+	zone.Number_of_writes += (uint64_t)write_sectors * SECTOR_SIZE_IN_BYTE;
 	zone.Empty = false;
 
 	const uint64_t start_block = zone_lba_offset / block_unit_lba;

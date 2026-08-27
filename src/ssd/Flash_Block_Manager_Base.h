@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <queue>
 #include <set>
+#include <string>
 #include "../nvm_chip/flash_memory/FlashTypes.h"
 #include "../nvm_chip/flash_memory/Physical_Page_Address.h"
 #include "GC_and_WL_Unit_Base.h"
@@ -38,6 +39,7 @@ namespace SSD_Components
 		uint64_t* Invalid_page_bitmap;//A bit sequence that keeps track of valid/invalid status of pages in the block. A "0" means valid, and a "1" means invalid.
 		stream_id_type Stream_id = NO_STREAM;
 		bool Holds_mapping_data = false;
+		bool Is_bad = false;
 		bool Has_ongoing_gc_wl = false;
 		NVM_Transaction_Flash_ER* Erase_transaction;
 		bool Hot_block = false;//Used for hot/cold separation mentioned in the "On the necessity of hot and cold data identification to reduce the write amplification in flash-based SSDs", Perf. Eval., 2014.
@@ -71,9 +73,23 @@ namespace SSD_Components
 		friend class GC_and_WL_Unit_Page_Level;
 		friend class GC_and_WL_Unit_Base;
 	public:
+		struct EOL_Status
+		{
+			bool Triggered = false;
+			unsigned int SSD_id = 0;
+			sim_time_type Time = 0;
+			uint64_t Bad_block_count = 0;
+			uint64_t Remaining_usable_blocks = 0;
+			double Effective_OP_ratio = 0.0;
+		};
+
+		static void Reset_EOL_status();
+		static EOL_Status Get_EOL_status();
+
 		Flash_Block_Manager_Base(GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
 			unsigned int channel_count, unsigned int chip_no_per_channel, unsigned int die_no_per_chip, unsigned int plane_no_per_die,
-			unsigned int block_no_per_plane, unsigned int page_no_per_block);
+			unsigned int block_no_per_plane, unsigned int page_no_per_block, unsigned int ssd_id, double overprovisioning_ratio,
+			bool bad_block_retirement_enabled, bool eol_stop_enabled, double end_of_life_threshold);
 		virtual ~Flash_Block_Manager_Base();
 		virtual void Allocate_block_and_page_in_plane_for_user_write(const stream_id_type streamID, NVM::FlashMemory::Physical_Page_Address& address) = 0;
 		virtual void Allocate_block_and_page_in_plane_for_gc_write(const stream_id_type streamID, NVM::FlashMemory::Physical_Page_Address& address) = 0;
@@ -96,6 +112,10 @@ namespace SSD_Components
 		void Program_transaction_serviced(const NVM::FlashMemory::Physical_Page_Address& page_address);//Updates the block bookkeeping record
 		bool Is_having_ongoing_program(const NVM::FlashMemory::Physical_Page_Address& block_address);//Cheks if block has any ongoing program request
 		bool Is_page_valid(Block_Pool_Slot_Type* block, flash_page_ID_type page_id);//Make the page invalid in the block bookkeeping record
+		uint64_t Get_bad_block_count() const { return bad_block_count; }
+		uint64_t Get_remaining_usable_block_count() const;
+		uint64_t Get_total_block_count() const { return total_block_count; }
+		double Get_current_effective_op_ratio() const;
 	protected:
 		PlaneBookKeepingType ****plane_manager;//Keeps track of plane block usage information
 		GC_and_WL_Unit_Base *gc_and_wl_unit;
@@ -107,7 +127,19 @@ namespace SSD_Components
 		unsigned int plane_no_per_die;
 		unsigned int block_no_per_plane;
 		unsigned int pages_no_per_block;
+		unsigned int ssd_id;
+		double overprovisioning_ratio;
+		bool bad_block_retirement_enabled;
+		bool eol_stop_enabled;
+		double end_of_life_threshold;
+		uint64_t total_block_count;
+		uint64_t user_block_count;
+		uint64_t bad_block_count;
 		void program_transaction_issued(const NVM::FlashMemory::Physical_Page_Address& page_address);//Updates the block bookkeeping record
+		bool Retire_block_if_worn_out(PlaneBookKeepingType* plane_record, Block_Pool_Slot_Type* block);
+		void Check_end_of_life();
+	private:
+		static EOL_Status global_eol_status;
 	};
 }
 
