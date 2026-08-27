@@ -1,19 +1,33 @@
-<?xml version="1.0" encoding="us-ascii"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Execution_Parameter_Set>
+
+	<!-- 호스트 및 링크 타이밍 설정 -->
 	<Host_Parameter_Set>
 		<PCIe_Lane_Bandwidth>1.00000</PCIe_Lane_Bandwidth>
 		<PCIe_Lane_Count>4</PCIe_Lane_Count>
 		<SATA_Processing_Delay>400000</SATA_Processing_Delay>
+
+		<!-- MQSim 호스트 측 응답 시간 로그 설정 -->
 		<Enable_ResponseTime_Logging>false</Enable_ResponseTime_Logging>
 		<ResponseTime_Logging_Period_Length>1000000</ResponseTime_Logging_Period_Length>
 	</Host_Parameter_Set>
+
 	<Device_Parameter_Set>
+
+		<!-- 기본 장치 설정 -->
 		<Seed>321</Seed>
 		<Enabled_Preconditioning>false</Enabled_Preconditioning>
 		<Memory_Type>FLASH</Memory_Type>
 		<HostInterface_Type>NVME</HostInterface_Type>
 		<IO_Queue_Depth>65535</IO_Queue_Depth>
 		<Queue_Fetch_Size>512</Queue_Fetch_Size>
+
+		<!--
+			SSD 데이터 캐시 매니저 종류.
+			여기서는 SIMPLE 또는 ADVANCED만 사용할 수 있음.
+			워크로드별 캐시를 끄려면 workload.xml에서
+			Device_Level_Data_Caching_Mode를 TURNED_OFF로 설정해야 함.
+		-->
 		<Caching_Mechanism>ADVANCED</Caching_Mechanism>
 		<Data_Cache_Sharing_Mode>SHARED</Data_Cache_Sharing_Mode>
 		<Data_Cache_Capacity>268435456</Data_Cache_Capacity>
@@ -23,59 +37,103 @@
 		<Data_Cache_DRAM_tRCD>13</Data_Cache_DRAM_tRCD>
 		<Data_Cache_DRAM_tCL>13</Data_Cache_DRAM_tCL>
 		<Data_Cache_DRAM_tRP>13</Data_Cache_DRAM_tRP>
+
+		<!-- 주소 매핑 및 CMT 설정 -->
 		<Address_Mapping>PAGE_LEVEL</Address_Mapping>
 		<Ideal_Mapping_Table>false</Ideal_Mapping_Table>
 		<CMT_Capacity>2097152</CMT_Capacity>
 		<CMT_Sharing_Mode>SHARED</CMT_Sharing_Mode>
+
+		<!-- 플래시 스케줄링 설정 -->
 		<Plane_Allocation_Scheme>CWDP</Plane_Allocation_Scheme>
 		<Transaction_Scheduling_Policy>PRIORITY_OUT_OF_ORDER</Transaction_Scheduling_Policy>
+
+		<!-- OP 및 GC 설정. GREEDY GC 안전성 테스트 시 GC_Block_Selection_Policy를 GREEDY로 설정 -->
 		<Overprovisioning_Ratio>0.07</Overprovisioning_Ratio>
 		<GC_Exec_Threshold>0.05000</GC_Exec_Threshold>
 		<GC_Block_Selection_Policy>RGA</GC_Block_Selection_Policy>
 		<Use_Copyback_for_GC>false</Use_Copyback_for_GC>
 		<Preemptible_GC_Enabled>false</Preemptible_GC_Enabled>
 		<GC_Hard_Threshold>0.005000</GC_Hard_Threshold>
-		<Dynamic_Wearleveling_Enabled>true</Dynamic_Wearleveling_Enabled>
-		<Static_Wearleveling_Enabled>true</Static_Wearleveling_Enabled>
+
+		<!--
+			SSD 내부 wear leveling 설정.
+			랩미팅 요구사항 기준 SWANS 실험에서는 둘 다 false로 유지.
+		-->
+		<Dynamic_Wearleveling_Enabled>false</Dynamic_Wearleveling_Enabled>
+		<Static_Wearleveling_Enabled>false</Static_Wearleveling_Enabled>
 		<Static_Wearleveling_Threshold>100</Static_Wearleveling_Threshold>
+
+		<!-- suspend 관련 타이밍 설정 -->
 		<Preferred_suspend_erase_time_for_read>700000</Preferred_suspend_erase_time_for_read>
 		<Preferred_suspend_erase_time_for_write>700000</Preferred_suspend_erase_time_for_write>
 		<Preferred_suspend_write_time_for_read>100000</Preferred_suspend_write_time_for_read>
+
+		<!-- 플래시 병렬성 및 채널 구조 설정 -->
 		<Flash_Channel_Count>8</Flash_Channel_Count>
 		<Flash_Channel_Width>1</Flash_Channel_Width>
 		<Channel_Transfer_Rate>333</Channel_Transfer_Rate>
 		<Chip_No_Per_Channel>4</Chip_No_Per_Channel>
 		<Flash_Comm_Protocol>NVDDR2</Flash_Comm_Protocol>
+
+		<!-- RAID 및 SWANS 기본 설정 -->
 		<SSD_Count>4</SSD_Count>
 		<Stripe_Unit_LBA>32768</Stripe_Unit_LBA>
 		<SWANS_Enabled>true</SWANS_Enabled>
 		<SWANS_Zone_Size_LBA>32768</SWANS_Zone_Size_LBA>
 		<Zone_Stripe_Multiplier>1</Zone_Stripe_Multiplier>
+
+		<!--
+			SWANS epoch 주기 설정.
+			시뮬레이터 시간 단위이며, 아래 값은 일반 실행용 기본값.
+			migration blocking 검증에 사용했던 짧은 테스트용 값이 아님.
+		-->
 		<SWANS_Epoch_Default>100000000</SWANS_Epoch_Default>
 		<SWANS_Epoch_Placement>200000000</SWANS_Epoch_Placement>
 		<SWANS_Epoch_Migration>400000000</SWANS_Epoch_Migration>
+
+		<!--
+			SWANS threshold 설정.
+			설정 단위는 Byte이고, 코드 내부에서 MiB로 변환한 뒤 Mu와 비교함.
+			8388608 = 8 MiB, 33554432 = 32 MiB.
+		-->
 		<SWANS_TH_Precautionary>8388608</SWANS_TH_Precautionary>
 		<SWANS_TH_Critical>33554432</SWANS_TH_Critical>
+
+		<!-- migration 실행 관련 설정 -->
 		<SWANS_Max_Concurrent_Migrations>1</SWANS_Max_Concurrent_Migrations>
 		<SWANS_Migration_Buffer_Limit>64</SWANS_Migration_Buffer_Limit>
 		<SWANS_Migration_Working_Queue_Limit>64</SWANS_Migration_Working_Queue_Limit>
 		<SWANS_Buffered_Write_Completion_Mode>DEFERRED</SWANS_Buffered_Write_Completion_Mode>
+
+		<!--
+			Bad block retire 및 EOL 종료 설정.
+			FIXED: workload 또는 Relay_Count가 끝날 때까지 실행.
+			EOL: effective OP가 End_of_Life_Threshold 이하가 되면 조기 종료.
+		-->
 		<Bad_Block_Retirement_Enabled>false</Bad_Block_Retirement_Enabled>
 		<Simulation_Stop_Mode>FIXED</Simulation_Stop_Mode>
 		<End_of_Life_Threshold>0.05</End_of_Life_Threshold>
+
+		<!-- NAND flash 타이밍 및 구조 설정 -->
 		<Flash_Parameter_Set>
 			<Flash_Technology>MLC</Flash_Technology>
 			<CMD_Suspension_Support>ERASE</CMD_Suspension_Support>
+
 			<Page_Read_Latency_LSB>75000</Page_Read_Latency_LSB>
 			<Page_Read_Latency_CSB>75000</Page_Read_Latency_CSB>
 			<Page_Read_Latency_MSB>75000</Page_Read_Latency_MSB>
+
 			<Page_Program_Latency_LSB>750000</Page_Program_Latency_LSB>
 			<Page_Program_Latency_CSB>750000</Page_Program_Latency_CSB>
 			<Page_Program_Latency_MSB>750000</Page_Program_Latency_MSB>
+
 			<Block_Erase_Latency>3800000</Block_Erase_Latency>
 			<Block_PE_Cycles_Limit>10000</Block_PE_Cycles_Limit>
+
 			<Suspend_Erase_Time>700000</Suspend_Erase_Time>
 			<Suspend_Program_Time>100000</Suspend_Program_Time>
+
 			<Die_No_Per_Chip>2</Die_No_Per_Chip>
 			<Plane_No_Per_Die>2</Plane_No_Per_Die>
 			<Block_No_Per_Plane>256</Block_No_Per_Plane>
@@ -83,5 +141,7 @@
 			<Page_Capacity>8192</Page_Capacity>
 			<Page_Metadat_Capacity>448</Page_Metadat_Capacity>
 		</Flash_Parameter_Set>
+
 	</Device_Parameter_Set>
+
 </Execution_Parameter_Set>
