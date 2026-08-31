@@ -7,6 +7,7 @@ namespace SSD_Components
 {
 	unsigned int Block_Pool_Slot_Type::Page_vector_size = 0;
 	Flash_Block_Manager_Base::EOL_Status Flash_Block_Manager_Base::global_eol_status;
+	std::function<void()> Flash_Block_Manager_Base::eol_diagnostic_callback;
 
 	void Flash_Block_Manager_Base::Reset_EOL_status()
 	{
@@ -16,6 +17,11 @@ namespace SSD_Components
 	Flash_Block_Manager_Base::EOL_Status Flash_Block_Manager_Base::Get_EOL_status()
 	{
 		return global_eol_status;
+	}
+
+	void Flash_Block_Manager_Base::Set_EOL_diagnostic_callback(const std::function<void()>& callback)
+	{
+		eol_diagnostic_callback = callback;
 	}
 
 	Flash_Block_Manager_Base::Flash_Block_Manager_Base(GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
@@ -322,6 +328,9 @@ namespace SSD_Components
 		global_eol_status.Bad_block_count = bad_block_count;
 		global_eol_status.Remaining_usable_blocks = Get_remaining_usable_block_count();
 		global_eol_status.Effective_OP_ratio = effective_op;
+		if (eol_diagnostic_callback) {
+			eol_diagnostic_callback();
+		}
 		Simulator->Stop_simulation();
 	}
 }

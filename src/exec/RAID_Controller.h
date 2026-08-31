@@ -47,6 +47,7 @@ public:
 		LHA_type total_logical_lha_count);
 
 	void Set_backend_ssds(const std::vector<SSD_Device*>& ssds);
+	void Print_runtime_snapshot(const char* label) const;
 	void Set_submit_callback(std::function<void(unsigned int, SSD_Components::User_Request*)> callback);
 	void Set_complete_callback(std::function<void(SSD_Components::User_Request*)> callback);
 

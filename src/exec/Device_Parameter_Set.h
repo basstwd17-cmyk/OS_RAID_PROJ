@@ -67,8 +67,8 @@ public:
 	sim_time_type SWANS_Epoch_Default;
 	sim_time_type SWANS_Epoch_Placement;
 	sim_time_type SWANS_Epoch_Migration;
-	double SWANS_TH_Precautionary;
-	double SWANS_TH_Critical;
+	double SWANS_TH_Precautionary; // XML input unit: MiB; converted once to bytes before internal policy use
+	double SWANS_TH_Critical;    // XML input unit: MiB; converted once to bytes before internal policy use
 	unsigned int SWANS_Max_Concurrent_Migrations;
 	unsigned int SWANS_Migration_Buffer_Limit;
 	unsigned int SWANS_Migration_Working_Queue_Limit;

@@ -40,6 +40,7 @@ namespace MQSimEngine {
 		std::unordered_map<sim_object_id_type, Sim_Object*> _ObjectList;
 		bool stop;
 		bool started;
+		Sim_Event* current_event;
 		static Engine* _instance;
 	};
 }

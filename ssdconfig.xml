@@ -94,11 +94,11 @@
 
 		<!--
 			SWANS threshold 설정.
-			설정 단위는 Byte이고, 코드 내부에서 MiB로 변환한 뒤 Mu와 비교함.
-			8388608 = 8 MiB, 33554432 = 32 MiB.
+			XML은 MiB 단위로 입력하고, 내부에서는 byte로 한 번 변환해 기존 알고리즘을 유지한다.
+			예: 8 MiB -> 8, 32 MiB -> 32.
 		-->
-		<SWANS_TH_Precautionary>8388608</SWANS_TH_Precautionary>
-		<SWANS_TH_Critical>33554432</SWANS_TH_Critical>
+		<SWANS_TH_Precautionary>8</SWANS_TH_Precautionary>
+		<SWANS_TH_Critical>32</SWANS_TH_Critical>
 
 		<!-- migration 실행 관련 설정 -->
 		<SWANS_Max_Concurrent_Migrations>1</SWANS_Max_Concurrent_Migrations>

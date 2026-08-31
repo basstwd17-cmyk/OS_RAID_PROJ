@@ -6,6 +6,7 @@
 #include <queue>
 #include <set>
 #include <string>
+#include <functional>
 #include "../nvm_chip/flash_memory/FlashTypes.h"
 #include "../nvm_chip/flash_memory/Physical_Page_Address.h"
 #include "GC_and_WL_Unit_Base.h"
@@ -85,6 +86,7 @@ namespace SSD_Components
 
 		static void Reset_EOL_status();
 		static EOL_Status Get_EOL_status();
+		static void Set_EOL_diagnostic_callback(const std::function<void()>& callback);
 
 		Flash_Block_Manager_Base(GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
 			unsigned int channel_count, unsigned int chip_no_per_channel, unsigned int die_no_per_chip, unsigned int plane_no_per_die,
@@ -140,6 +142,7 @@ namespace SSD_Components
 		void Check_end_of_life();
 	private:
 		static EOL_Status global_eol_status;
+		static std::function<void()> eol_diagnostic_callback;
 	};
 }
 

@@ -10,6 +10,7 @@
 #include "../sim/Sim_Defs.h"
 #include "../utils/XMLWriter.h"
 #include "SSD_Device.h"
+#include "../ssd/Stats.h"
 
 static const bool ENABLE_RAID_DEBUG_LOG = false;
 static const bool ENABLE_RAID_WARN_LOG = true;
@@ -145,6 +146,21 @@ void RAID_Controller::Set_submit_callback(std::function<void(unsigned int, SSD_C
 void RAID_Controller::Set_complete_callback(std::function<void(SSD_Components::User_Request*)> callback)
 {
 	complete_callback = callback;
+}
+
+void RAID_Controller::Print_runtime_snapshot(const char* label) const
+{
+	std::cerr << "[" << label << "] Time=" << Simulator->Time()
+		<< " Host_Read=" << raid_request_stats.Completed_read_sectors
+		<< " Host_Write=" << raid_request_stats.Completed_write_sectors
+		<< " Program=" << SSD_Components::Stats::IssuedProgramCMD
+		<< " Erase=" << SSD_Components::Stats::IssuedEraseCMD
+		<< " GC=" << SSD_Components::Stats::Total_gc_executions
+		<< " WL=" << SSD_Components::Stats::Total_wl_executions
+		<< " Redirect=" << swans_stats.Redirect_operations
+		<< " Migration=" << swans_stats.Migration_operations
+		<< " Migration_BG_Read=" << swans_stats.Background_read_ios
+		<< " Migration_BG_Write=" << swans_stats.Background_write_ios << std::endl;
 }
 
 void RAID_Controller::Map(LHA_type lba, unsigned int& disk_id, LHA_type& physical_lba) const

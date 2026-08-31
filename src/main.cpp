@@ -296,6 +296,9 @@ int main(int argc, char* argv[])
 		
 		// RAID 장치 생성
 		RAID_Device* raid_device = new RAID_Device(&exec_params->SSD_Device_Configuration, &exec_params->Host_Configuration.IO_Flow_Definitions);
+		SSD_Components::Flash_Block_Manager_Base::Set_EOL_diagnostic_callback([raid_device]() {
+			raid_device->Print_runtime_snapshot("EOL_SNAPSHOT");
+		});
 		{
 			Host_System host(&exec_params->Host_Configuration, exec_params->SSD_Device_Configuration.Enabled_Preconditioning, raid_device->Get_host_interface());
 			host.Attach_storage_device(raid_device);
@@ -305,6 +308,7 @@ int main(int argc, char* argv[])
 				});
 
 			Simulator->Start_simulation(); // 시뮬레이션 시작
+			raid_device->Print_runtime_snapshot("FINAL_SNAPSHOT");
 			Host_Components::IO_Flow_Trace_Based::Set_relay_boundary_callback(nullptr);
 
 			time_t end_time = time(0);
@@ -321,6 +325,7 @@ int main(int argc, char* argv[])
 		}
 
 		delete raid_device;
+		SSD_Components::Flash_Block_Manager_Base::Set_EOL_diagnostic_callback(nullptr);
 	}
     cout << "Simulation complete; Press any key to exit." << endl;
 

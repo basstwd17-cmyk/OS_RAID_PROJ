@@ -31,6 +31,7 @@ public:
 	void Execute_simulator_event(MQSimEngine::Sim_Event* event);
 	void Report_results_in_XML(std::string name_prefix, Utils::XmlWriter& xmlwriter) override;
 	void Print_relay_boundary_status(unsigned int relay_index, unsigned int relay_count, uint64_t cumulative_host_requests) const;
+	void Print_runtime_snapshot(const char* label) const;
 	unsigned int Get_no_of_LHAs_in_an_NVM_write_unit() override;
 	LPA_type Convert_host_logical_address_to_device_address(LHA_type lha) override;
 	page_status_type Find_NVM_subunit_access_bitmap(LHA_type lha) override;

@@ -20,6 +20,7 @@ namespace MQSimEngine
 		_sim_time = 0;
 		stop = false;
 		started = false;
+		current_event = NULL;
 		Utils::Logical_Address_Partitioning_Unit::Reset();
 	}
 
@@ -85,23 +86,45 @@ namespace MQSimEngine
 
 			EventTreeNode* minNode = _EventList->Get_min_node();
 			ev = minNode->FirstSimEvent;
-
 			_sim_time = ev->Fire_time;
 
 			while (ev != NULL) {
+				if (stop) {
+					Sim_Event* remaining = ev;
+					while (remaining != NULL) {
+						Sim_Event* next_event = remaining->Next_event;
+						delete remaining;
+						remaining = next_event;
+					}
+					break;
+				}
 				if(!ev->Ignore) {
+					current_event = ev;
 					ev->Target_sim_object->Execute_simulator_event(ev);
+					current_event = NULL;
 				}
 				Sim_Event* consumed_event = ev;
 				ev = ev->Next_event;
 				delete consumed_event;
 			}
 			_EventList->Remove(minNode);
+			if (stop) {
+				break;
+			}
 		}
 	}
 
 	void Engine::Stop_simulation()
 	{
+		if (!stop) {
+			unsigned int remaining_same_timestamp_events = 0;
+			for (Sim_Event* event = current_event == NULL ? NULL : current_event->Next_event;
+				event != NULL; event = event->Next_event) {
+				remaining_same_timestamp_events++;
+			}
+			std::cerr << "EOL_REMAINING_SAME_TIMESTAMP_EVENTS=" << remaining_same_timestamp_events << std::endl;
+			std::cerr << "EOL_REMAINING_FUTURE_EVENTS=" << (_EventList->Count > 0 ? _EventList->Count - 1 : 0) << std::endl;
+		}
 		stop = true;
 	}
 
@@ -117,6 +140,9 @@ namespace MQSimEngine
 
 	Sim_Event* Engine::Register_sim_event(sim_time_type fireTime, Sim_Object* targetObject, void* parameters, int type)
 	{
+		if (stop) {
+			return nullptr;
+		}
 		Sim_Event* ev = new Sim_Event(fireTime, targetObject, parameters, type);
 		DEBUG("RegisterEvent " << fireTime << " " << targetObject)
 		_EventList->Insert_sim_event(ev);

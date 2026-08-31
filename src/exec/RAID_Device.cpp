@@ -107,8 +107,8 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 		parameters->SWANS_Epoch_Default,
 		parameters->SWANS_Epoch_Placement,
 		parameters->SWANS_Epoch_Migration,
-		parameters->SWANS_TH_Precautionary,
-		parameters->SWANS_TH_Critical,
+		parameters->SWANS_TH_Precautionary * 1024.0 * 1024.0,
+		parameters->SWANS_TH_Critical * 1024.0 * 1024.0,
 		parameters->SWANS_Max_Concurrent_Migrations,
 		parameters->SWANS_Migration_Working_Queue_Limit,
 		raid_visible_lha_count);
@@ -154,6 +154,11 @@ RAID_Device::~RAID_Device()
 		delete ssd;
 	}
 }
+
+	void RAID_Device::Print_runtime_snapshot(const char* label) const
+	{
+		raid_controller->Print_runtime_snapshot(label);
+	}
 
 void RAID_Device::Attach_to_host(Host_Components::PCIe_Switch* pcie_switch)
 {

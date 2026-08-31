@@ -64,9 +64,7 @@ namespace SSD_Components
 					delete dram_execution_queue[0].front();
 					dram_execution_queue[0].pop();
 				}
-				for (auto &req : waiting_user_requests_queue_for_dram_free_slot[0]) {
-					delete req;
-				}
+				waiting_user_requests_queue_for_dram_free_slot[0].clear();
 				break;
 			}
 			case SSD_Components::Cache_Sharing_Mode::EQUAL_PARTITIONING:
@@ -76,9 +74,7 @@ namespace SSD_Components
 						delete dram_execution_queue[i].front();
 						dram_execution_queue[i].pop();
 					}
-					for (auto &req : waiting_user_requests_queue_for_dram_free_slot[i]) {
-						delete req;
-					}
+					waiting_user_requests_queue_for_dram_free_slot[i].clear();
 				}
 				break;
 			default:
