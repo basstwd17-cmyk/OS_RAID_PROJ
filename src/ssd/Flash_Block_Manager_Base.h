@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <queue>
 #include <set>
+#include <string>
 #include "../nvm_chip/flash_memory/FlashTypes.h"
 #include "../nvm_chip/flash_memory/Physical_Page_Address.h"
 #include "GC_and_WL_Unit_Base.h"
@@ -41,6 +42,7 @@ namespace SSD_Components
 		bool Has_ongoing_gc_wl = false;
 		NVM_Transaction_Flash_ER* Erase_transaction;
 		bool Hot_block = false;//Used for hot/cold separation mentioned in the "On the necessity of hot and cold data identification to reduce the write amplification in flash-based SSDs", Perf. Eval., 2014.
+		bool Is_bad = false;//Permanently retired after reaching the configured PE-cycle limit
 		int Ongoing_user_read_count;
 		int Ongoing_user_program_count;
 		void Erase();
@@ -71,9 +73,10 @@ namespace SSD_Components
 		friend class GC_and_WL_Unit_Page_Level;
 		friend class GC_and_WL_Unit_Base;
 	public:
-		Flash_Block_Manager_Base(GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
+		Flash_Block_Manager_Base(const std::string& device_id, GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
 			unsigned int channel_count, unsigned int chip_no_per_channel, unsigned int die_no_per_chip, unsigned int plane_no_per_die,
-			unsigned int block_no_per_plane, unsigned int page_no_per_block);
+			unsigned int block_no_per_plane, unsigned int page_no_per_block, double overprovisioning_ratio,
+			bool bad_block_retirement_enabled, double end_of_life_threshold);
 		virtual ~Flash_Block_Manager_Base();
 		virtual void Allocate_block_and_page_in_plane_for_user_write(const stream_id_type streamID, NVM::FlashMemory::Physical_Page_Address& address) = 0;
 		virtual void Allocate_block_and_page_in_plane_for_gc_write(const stream_id_type streamID, NVM::FlashMemory::Physical_Page_Address& address) = 0;
@@ -83,6 +86,9 @@ namespace SSD_Components
 		virtual void Invalidate_page_in_block_for_preconditioning(const stream_id_type streamID, const NVM::FlashMemory::Physical_Page_Address& address) = 0;
 		virtual void Add_erased_block_to_pool(const NVM::FlashMemory::Physical_Page_Address& address) = 0;
 		virtual unsigned int Get_pool_size(const NVM::FlashMemory::Physical_Page_Address& plane_address) = 0;
+		// The smallest free-block pool among this SSD's planes. It is retained
+		// as a diagnostic; allocation control is performed per target plane.
+		unsigned int Get_minimum_free_block_pool_size() const;
 		flash_block_ID_type Get_coldest_block_id(const NVM::FlashMemory::Physical_Page_Address& plane_address);
 		unsigned int Get_min_max_erase_difference(const NVM::FlashMemory::Physical_Page_Address& plane_address);
 		void Set_GC_and_WL_Unit(GC_and_WL_Unit_Base* );
@@ -96,6 +102,10 @@ namespace SSD_Components
 		void Program_transaction_serviced(const NVM::FlashMemory::Physical_Page_Address& page_address);//Updates the block bookkeeping record
 		bool Is_having_ongoing_program(const NVM::FlashMemory::Physical_Page_Address& block_address);//Cheks if block has any ongoing program request
 		bool Is_page_valid(Block_Pool_Slot_Type* block, flash_page_ID_type page_id);//Make the page invalid in the block bookkeeping record
+		uint64_t Get_total_block_count() const { return total_block_count; }
+		uint64_t Get_bad_block_count() const { return bad_block_count; }
+		uint64_t Get_remaining_usable_block_count() const;
+		double Get_current_op_ratio() const;
 	protected:
 		PlaneBookKeepingType ****plane_manager;//Keeps track of plane block usage information
 		GC_and_WL_Unit_Base *gc_and_wl_unit;
@@ -107,6 +117,15 @@ namespace SSD_Components
 		unsigned int plane_no_per_die;
 		unsigned int block_no_per_plane;
 		unsigned int pages_no_per_block;
+		std::string device_id;
+		double overprovisioning_ratio;
+		double end_of_life_threshold;
+		bool bad_block_retirement_enabled;
+		bool eol_reached;
+		uint64_t total_block_count;
+		uint64_t original_op_block_budget;
+		uint64_t bad_block_count;
+		bool Retire_block_if_worn_out(Block_Pool_Slot_Type* block);
 		void program_transaction_issued(const NVM::FlashMemory::Physical_Page_Address& page_address);//Updates the block bookkeeping record
 	};
 }

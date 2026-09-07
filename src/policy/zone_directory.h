@@ -46,11 +46,15 @@ public:
 	bool Is_empty(uint64_t zone_id) const;
 	bool Is_migrating(uint64_t zone_id) const;
 	uint64_t Zone_write_count(uint64_t zone_id) const;
+	uint64_t Total_zone_write_count() const;
+	uint64_t Zone_written_sectors(uint64_t zone_id) const;
 	uint64_t Duplicate_physical_location_count() const;
 	uint64_t Migrating_zone_count() const;
 
-	void Observe_write(stream_id_type stream_id, uint64_t zone_id, uint64_t zone_lba_offset, unsigned int write_sectors);
-	void Observe_write(uint64_t zone_id, uint64_t zone_lba_offset, unsigned int write_sectors);
+	void Observe_write(stream_id_type stream_id, uint64_t zone_id, uint64_t zone_lba_offset,
+		unsigned int write_sectors, bool count_host_request_zone_touch);
+	void Observe_write(uint64_t zone_id, uint64_t zone_lba_offset, unsigned int write_sectors,
+		bool count_host_request_zone_touch);
 	std::map<stream_id_type, std::vector<unsigned int>> Written_block_offsets_by_stream(uint64_t zone_id) const;
 	std::vector<unsigned int> Written_block_offsets(uint64_t zone_id) const;
 	void Merge_written_blocks(stream_id_type stream_id, uint64_t zone_id, const std::vector<bool>& written_blocks);
@@ -69,7 +73,8 @@ private:
 	struct ZoneEntry {
 		uint64_t Physical_ssd = 0;     // physical SSD where this logical zone is currently placed
 		uint64_t Physical_zone = 0;    // physical zone index inside that SSD
-		uint64_t Number_of_writes = 0; // accumulated write subrequests for this logical zone
+		uint64_t Number_of_writes = 0; // accumulated host-write requests that touched this logical zone
+		uint64_t Written_sectors = 0;  // accumulated logical host-write sectors for this logical zone
 		bool Empty = true;
 		bool Migrating = false;
 		std::map<stream_id_type, std::vector<bool>> Written_blocks_by_stream; // BlockWriteMap: stream -> per-block written bitmap within this zone

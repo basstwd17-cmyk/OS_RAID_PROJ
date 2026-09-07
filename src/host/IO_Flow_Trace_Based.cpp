@@ -2,6 +2,7 @@
 #include "../utils/StringTools.h"
 #include "ASCII_Trace_Definition.h"
 #include "../utils/DistributionTypes.h"
+#include "../ssd/Device_Lifecycle_Monitor.h"
 
 namespace Host_Components
 {
@@ -10,13 +11,17 @@ IO_Flow_Trace_Based::IO_Flow_Trace_Based(const sim_object_id_type &name, uint16_
 										 std::string trace_file_path, Trace_Time_Unit time_unit, unsigned int total_replay_count, unsigned int percentage_to_be_simulated,
 										 HostInterface_Types SSD_device_type, PCIe_Root_Complex *pcie_root_complex, SATA_HBA *sata_hba,
 										 bool enabled_logging, sim_time_type logging_period, std::string logging_file_path) : IO_Flow_Base(name, flow_id, start_lsa_on_device, end_lsa_on_device, io_queue_id, nvme_submission_queue_size, nvme_completion_queue_size, priority_class, 0, initial_occupancy_ratio, 0, SSD_device_type, pcie_root_complex, sata_hba, enabled_logging, logging_period, logging_file_path),
-																															  trace_file_path(trace_file_path), time_unit(time_unit), total_replay_no(total_replay_count), percentage_to_be_simulated(percentage_to_be_simulated),
-																															  total_requests_in_file(0), time_offset(0)
+																									  trace_file_path(trace_file_path), time_unit(time_unit), total_replay_no(total_replay_count), percentage_to_be_simulated(percentage_to_be_simulated),
+																									  replay_counter(1), repeat_until_eol(total_replay_count == 0), total_requests_in_file(0), time_offset(0)
 {
-	if (percentage_to_be_simulated > 100)
+	if (this->percentage_to_be_simulated > 100)
 	{
-		percentage_to_be_simulated = 100;
+		this->percentage_to_be_simulated = 100;
 		PRINT_MESSAGE("Bad value for percentage of trace file! It is set to 100 % ");
+	}
+	if (repeat_until_eol && this->percentage_to_be_simulated != 100) {
+		this->percentage_to_be_simulated = 100;
+		PRINT_MESSAGE("Relay_Count is zero: Percentage_To_Be_Executed is ignored and the full trace will repeat until EOL")
 	}
 }
 
@@ -26,7 +31,7 @@ IO_Flow_Trace_Based::~IO_Flow_Trace_Based()
 
 Host_IO_Request *IO_Flow_Trace_Based::Generate_next_request()
 {
-	if (current_trace_line.size() == 0 || STAT_generated_request_count >= total_requests_to_be_generated)
+	if (current_trace_line.size() == 0 || (!repeat_until_eol && STAT_generated_request_count >= total_requests_to_be_generated))
 	{
 		return NULL;
 	}
@@ -106,9 +111,17 @@ void IO_Flow_Trace_Based::Start_simulation()
 	}
 
 	trace_file.close();
+	if (total_requests_in_file == 0) {
+		PRINT_ERROR("Input trace file contains no valid requests: " << trace_file_path)
+	}
 	PRINT_MESSAGE("Trace file: " << trace_file_path << " seems healthy");
 
-	if (total_replay_no == 1)
+	if (repeat_until_eol)
+	{
+		total_requests_to_be_generated = 0;
+		PRINT_MESSAGE("Flow " << ID() << " will repeat the full trace until an SSD reaches EOL (Relay_Count=0)")
+	}
+	else if (total_replay_no == 1)
 	{
 		total_requests_to_be_generated = (int)(((double)percentage_to_be_simulated / 100) * total_requests_in_file);
 	}
@@ -131,13 +144,19 @@ void IO_Flow_Trace_Based::Validate_simulation_config()
 
 void IO_Flow_Trace_Based::Execute_simulator_event(MQSimEngine::Sim_Event *)
 {
+	if (repeat_until_eol && SSD_Components::Device_Lifecycle_Monitor::Has_reached_end_of_life()) {
+		SSD_Components::Device_Lifecycle_Monitor::Record_eol_replay_round(replay_counter);
+		PRINT_MESSAGE("Flow " << ID() << " stopped generating requests after " << replay_counter << " replay round(s) because EOL was reached")
+		return;
+	}
+
 	Host_IO_Request *request = Generate_next_request();
 	if (request != NULL)
 	{
 		Submit_io_request(request);
 	}
 
-	if (STAT_generated_request_count < total_requests_to_be_generated)
+	if (repeat_until_eol || STAT_generated_request_count < total_requests_to_be_generated)
 	{
 		std::string trace_line;
 		if (std::getline(trace_file, trace_line))
@@ -156,7 +175,14 @@ void IO_Flow_Trace_Based::Execute_simulator_event(MQSimEngine::Sim_Event *)
 			Utils::Helper_Functions::Remove_cr(trace_line);
 			current_trace_line.clear();
 			Utils::Helper_Functions::Tokenize(trace_line, ASCIILineDelimiter, current_trace_line);
-			PRINT_MESSAGE("* Replay round " << replay_counter << "of " << total_replay_no << " started  for" << ID())
+			if (repeat_until_eol) {
+				PRINT_MESSAGE("* Replay round " << replay_counter << " started for " << ID() << " (until EOL)")
+			} else {
+				PRINT_MESSAGE("* Replay round " << replay_counter << " of " << total_replay_no << " started for " << ID())
+			}
+		}
+		if (current_trace_line.size() != ASCIIItemsPerLine) {
+			PRINT_ERROR("Malformed or empty trace record while replaying: " << trace_file_path)
 		}
 		char *pEnd;
 		Simulator->Register_sim_event(time_offset + std::strtoll(current_trace_line[ASCIITraceTimeColumn].c_str(), &pEnd, 10), this);

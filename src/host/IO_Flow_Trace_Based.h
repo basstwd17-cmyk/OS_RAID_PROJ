@@ -34,6 +34,7 @@ private:
 	std::string trace_file_path;
 	std::ifstream trace_file;
 	unsigned int total_replay_no, replay_counter;
+	bool repeat_until_eol;
 	unsigned int total_requests_in_file;
 	std::vector<std::string> current_trace_line;
 	sim_time_type time_offset;

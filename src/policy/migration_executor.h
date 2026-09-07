@@ -23,11 +23,16 @@ public:
 	struct DeferredRequest {
 		SSD_Components::User_Request* Request = nullptr;
 		bool Complete_without_dispatch = false;
+		sim_time_type Enqueue_time = 0;
+	};
+
+	struct AbortSummary {
+		uint64_t Task_count = 0;
+		uint64_t Deferred_request_count = 0;
 	};
 
 	typedef std::function<io_request_id_type(const StripeCopyPlan&, bool is_write, uint64_t task_index)> SubmitCopyFunction;
 	typedef std::function<bool(const StripeCopyPlan&, uint64_t task_index)> DiscardFunction;
-	typedef std::function<void(const MigrationTask&, uint64_t moved_write_count)> CompletionFunction;
 	typedef std::function<void(const MigrationTask&, const SSD_Components::User_Request*)> BufferedWriteObserveFunction;
 
 	MigrationExecutor();
@@ -36,16 +41,24 @@ public:
 	void Configure(unsigned int buffer_limit_per_task);
 	void Start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory);
 	bool Has_inflight() const { return !inflight.empty(); }
+	// A migration copy is issued one at a time per task.  The controller uses
+	// this to wait for the completion callback instead of continuously polling
+	// the simulator while flash I/O is in flight.
+	bool Has_active_copy() const;
+	// A request that intersects any active task must not be replayed against a
+	// zone whose placement is still changing.
+	bool Intersects_inflight_zones(const std::vector<uint64_t>& request_zone_ids) const;
+	AbortSummary Abort_all(ZoneDirectory& directory);
 
 	InterceptResult Maybe_intercept(SSD_Components::User_Request* request,
 		const std::vector<uint64_t>& request_zone_ids,
 		ZoneDirectory& directory,
-		const BufferedWriteObserveFunction& observe_buffered_write = BufferedWriteObserveFunction());
+		const BufferedWriteObserveFunction& observe_buffered_write = BufferedWriteObserveFunction(),
+		sim_time_type enqueue_time = 0);
 	bool Notify_request_completed(io_request_id_type request_id, ZoneDirectory& directory);
 	void Poll(ZoneDirectory& directory,
 		const SubmitCopyFunction& submit_copy,
-		const DiscardFunction& discard_source,
-		const CompletionFunction& complete_migration);
+		const DiscardFunction& discard_source);
 
 	std::vector<DeferredRequest> Drain_replay_requests();
 	uint64_t Buffered_count() const;
@@ -80,6 +93,8 @@ private:
 		std::vector<StripeCopyPlan> Restore_copies;
 		std::map<stream_id_type, std::vector<RestoreBlockState>> Restore_block_states;
 		std::map<stream_id_type, std::vector<bool>> Restore_after_active_write;
+		std::map<stream_id_type, std::vector<bool>> Discarded_source_blocks;
+		std::deque<std::pair<stream_id_type, unsigned int>> Pending_source_discards;
 		size_t Next_grab = 0;
 		size_t Next_restore = 0;
 		TaskState State = TaskState::IDLE;
@@ -96,6 +111,9 @@ private:
 	void Append_restore_copy(InflightTask& task, stream_id_type stream_id, unsigned int block_offset, const ZoneDirectory& directory);
 	void Request_restore_after_dirty(InflightTask& task, stream_id_type stream_id, unsigned int block_offset, const ZoneDirectory& directory);
 	void Build_restore_copies(InflightTask& task, ZoneDirectory& directory);
+	void Discard_source_block(InflightTask& task, stream_id_type stream_id, unsigned int block_offset,
+		const DiscardFunction& discard_source, uint64_t task_index);
+	void Drain_pending_source_discards(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index);
 	void Discard_source_copies(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index);
 	void Drain_task(InflightTask& task, ZoneDirectory& directory);
 

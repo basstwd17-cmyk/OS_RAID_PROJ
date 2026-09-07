@@ -10,6 +10,8 @@
 #include "FTL.h"
 #include "Flash_Block_Manager_Base.h"
 
+#include <cstdint>
+
 namespace SSD_Components
 {
 	class FTL;
@@ -31,6 +33,41 @@ namespace SSD_Components
 	enum class Moving_LPA_Status { GC_IS_READING_PHYSICAL_BLOCK, GC_IS_READING_DATA, GC_IS_WRITING_DATA, 
 		GC_IS_READING_PHYSICAL_BLOCK_AND_THERE_IS_USER_READ, GC_IS_READING_DATA_AND_THERE_IS_USER_READ,
 	    GC_IS_READING_PHYSICAL_BLOCK_AND_PAGE_IS_INVALIDATED, GC_IS_READING_DATA_AND_PAGE_IS_INVALIDATED, GC_IS_WRITING_DATA_AND_PAGE_IS_INVALIDATED};
+
+	// These counters describe the mapping-layer barriers used by GC/WL. They are
+	// intentionally separate from the RAID zone-migration barrier statistics.
+	struct Barrier_Statistics
+	{
+		uint64_t LPA_lock_acquisitions = 0;
+		uint64_t LPA_lock_releases = 0;
+		uint64_t MVPN_lock_acquisitions = 0;
+		uint64_t MVPN_lock_releases = 0;
+		uint64_t Overlapping_LPA_locks = 0;
+		uint64_t Overlapping_MVPN_locks = 0;
+		uint64_t Duplicate_owner_locks = 0;
+		uint64_t Unmatched_LPA_unlocks = 0;
+		uint64_t Unmatched_MVPN_unlocks = 0;
+		uint64_t Owner_mismatch_unlocks = 0;
+		uint64_t Released_user_transactions = 0;
+		uint64_t Current_LPA_barriers = 0;
+		uint64_t Current_MVPN_barriers = 0;
+		uint64_t Current_LPA_lock_owners = 0;
+		uint64_t Current_MVPN_lock_owners = 0;
+		sim_time_type Total_user_transaction_wait_time = 0;
+		sim_time_type Max_user_transaction_wait_time = 0;
+		sim_time_type Max_barrier_lifetime = 0;
+	};
+
+	// These counters describe the existing MQSim free-block-pressure flow
+	// control. A program transaction is queued before it can consume GC's
+	// reserved free blocks, and is retried after an erase completes.
+	struct Free_Block_Pool_Statistics
+	{
+		uint64_t Deferred_program_transactions = 0;
+		uint64_t Resumed_program_transactions = 0;
+		uint64_t Current_deferred_program_transactions = 0;
+		uint64_t Maximum_deferred_program_transactions = 0;
+	};
 
 	class Address_Mapping_Unit_Base : public MQSimEngine::Sim_Object
 	{
@@ -65,6 +102,8 @@ namespace SSD_Components
 		virtual NVM::FlashMemory::Physical_Page_Address Convert_ppa_to_address(const PPA_type ppa) = 0;
 		virtual void Convert_ppa_to_address(const PPA_type ppa, NVM::FlashMemory::Physical_Page_Address& address) = 0;
 		virtual PPA_type Convert_address_to_ppa(const NVM::FlashMemory::Physical_Page_Address& pageAddress) = 0;
+		virtual Barrier_Statistics Get_barrier_statistics() const { return Barrier_Statistics(); }
+		virtual Free_Block_Pool_Statistics Get_free_block_pool_statistics() const { return Free_Block_Pool_Statistics(); }
 
 		/*********************************************************************************************************************
 		 These are system state consistency control functions that are used for garbage collection and wear-leveling execution.
@@ -75,10 +114,10 @@ namespace SSD_Components
 
 		**********************************************************************************************************************/
 		virtual void Set_barrier_for_accessing_physical_block(const NVM::FlashMemory::Physical_Page_Address& block_address) = 0;//At the very beginning of executing a GC request, the GC target physical block (that is selected for erase) should be protected by a barrier. The LPAs within this block are unknown until the content of the physical pages within the block are read one-by-one. Therfore, at the start of the GC execution, the barrier is set for the physical block. Later, when the LPAs are read from the physical block, the above functions are used to lock each of the LPAs.
-		virtual void Set_barrier_for_accessing_lpa(const stream_id_type stream_id, const LPA_type lpa) = 0; //It sets a barrier for accessing an LPA, when the GC unit (i.e., GC_and_WL_Unit_Base) starts moving an LPA from one physical page to another physical page. This type of barrier is pretty much like a memory barrier in CPU, i.e., all accesses to the lpa that issued before setting the barrier still can be executed, but no new access is allowed.
-		virtual void Set_barrier_for_accessing_mvpn(const stream_id_type stream_id, const MVPN_type mvpn) = 0; //It sets a barrier for accessing an MVPN, when the GC unit(i.e., GC_and_WL_Unit_Base) starts moving an mvpn from one physical page to another physical page. This type of barrier is pretty much like a memory barrier in CPU, i.e., all accesses to the lpa that issued before setting the barrier can be executed, but no new access is allowed.
-		virtual void Remove_barrier_for_accessing_lpa(const stream_id_type stream_id, const LPA_type lpa) = 0; //Removes the barrier that has already been set for accessing an LPA (i.e., the GC_and_WL_Unit_Base unit successfully finished relocating LPA from one physical location to another physical location).
-		virtual void Remove_barrier_for_accessing_mvpn(const stream_id_type stream_id, const MVPN_type mvpn) = 0; //Removes the barrier that has already been set for accessing an MVPN (i.e., the GC_and_WL_Unit_Base unit successfully finished relocating MVPN from one physical location to another physical location).
+		virtual void Set_barrier_for_accessing_lpa(const stream_id_type stream_id, const LPA_type lpa, const NVM::FlashMemory::Physical_Page_Address& owner_block_address) = 0; //It sets a barrier for accessing an LPA, when the GC unit (i.e., GC_and_WL_Unit_Base) starts moving an LPA from one physical page to another physical page. owner_block_address identifies the GC/WL operation that owns the barrier.
+		virtual void Set_barrier_for_accessing_mvpn(const stream_id_type stream_id, const MVPN_type mvpn, const NVM::FlashMemory::Physical_Page_Address& owner_block_address) = 0; //It sets a barrier for accessing an MVPN, when the GC unit(i.e., GC_and_WL_Unit_Base) starts moving an mvpn from one physical page to another physical page.
+		virtual void Remove_barrier_for_accessing_lpa(const stream_id_type stream_id, const LPA_type lpa, const NVM::FlashMemory::Physical_Page_Address& owner_block_address) = 0; //Removes only the barrier owned by the completed GC/WL operation.
+		virtual void Remove_barrier_for_accessing_mvpn(const stream_id_type stream_id, const MVPN_type mvpn, const NVM::FlashMemory::Physical_Page_Address& owner_block_address) = 0; //Removes only the barrier owned by the completed GC/WL operation.
 		virtual void Start_servicing_writes_for_overfull_plane(const NVM::FlashMemory::Physical_Page_Address plane_address) = 0;//This function is invoked when GC execution is finished on a plane and the plane has enough number of free pages to service writes
 	protected:
 		FTL* ftl;

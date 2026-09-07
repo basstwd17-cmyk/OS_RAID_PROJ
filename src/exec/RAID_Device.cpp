@@ -7,6 +7,7 @@
 #include "../ssd/Host_Interface_NVMe.h"
 #include "../ssd/Host_Interface_SATA.h"
 #include "../ssd/FTL.h"
+#include "../ssd/Device_Lifecycle_Monitor.h"
 #include "../ssd/ONFI_Channel_Base.h"
 #include "../utils/Logical_Address_Partitioning_Unit.h"
 #include "../nvm_chip/flash_memory/Physical_Page_Address.h"
@@ -18,6 +19,8 @@ namespace {
 	static const bool RAID_REPORT_INCLUDE_PLANE_DETAILS = false;
 	static const bool RAID_REPORT_INCLUDE_HISTOGRAM_BINS = true;
 	static const bool RAID_REPORT_INCLUDE_BACKEND_SSD_DETAILS = true;
+	// The paper reports threshold values 5/15 without a byte unit. This implementation
+	// applies them to the host-request x logical-zone-touch write-count standard deviation.
 
 	struct Erase_Distribution_Summary
 	{
@@ -109,6 +112,7 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 		parameters->SWANS_TH_Critical,
 		parameters->SWANS_Max_Concurrent_Migrations,
 		parameters->SWANS_Migration_Working_Queue_Limit,
+		parameters->SWANS_Balance_Unit_Bytes,
 		raid_visible_lha_count);
 	Simulator->AddObject(raid_controller); // 시뮬레이터에 등록
 
@@ -235,8 +239,23 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 		raid_controller->Report_results_in_XML(tmp, xmlwriter);
 	}
 	{
+		SSD_Components::Device_Lifecycle_Status eol_status = SSD_Components::Device_Lifecycle_Monitor::Get_status();
+		std::string eol_tag = tmp + ".EndOfLife";
+		xmlwriter.Write_open_tag(eol_tag);
+		xmlwriter.Write_attribute_string("EOL_Triggered", eol_status.Triggered ? "true" : "false");
+		xmlwriter.Write_attribute_string("First_EOL_SSD_ID", eol_status.Device_id);
+		xmlwriter.Write_attribute_string("EOL_Time", std::to_string(eol_status.Time));
+		xmlwriter.Write_attribute_string("EOL_Bad_Block_Count", std::to_string(eol_status.Bad_block_count));
+		xmlwriter.Write_attribute_string("EOL_Total_Block_Count", std::to_string(eol_status.Total_block_count));
+		xmlwriter.Write_attribute_string("EOL_Remaining_Usable_Blocks", std::to_string(eol_status.Remaining_usable_blocks));
+		xmlwriter.Write_attribute_string("EOL_Remaining_OP_Ratio", std::to_string(eol_status.Remaining_op_ratio));
+		xmlwriter.Write_attribute_string("EOL_Replay_Round", std::to_string(eol_status.Replay_round));
+		xmlwriter.Write_close_tag();
+	}
+	{
 		std::string wl_tag = tmp + ".WearLeveling";
 		xmlwriter.Write_open_tag(wl_tag);
+		xmlwriter.Write_attribute_string("Statistics_Domain", "PHYSICAL_NAND");
 		unsigned long long total_flash_page_programs_all_ssds = 0;
 		unsigned long long total_flash_page_erases_all_ssds = 0;
 		unsigned long long total_host_write_bytes_dispatched_all_ssds = 0;
@@ -332,6 +351,10 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 			xmlwriter.Write_attribute_string("SSD_ID", std::to_string(ssd_idx));
 			xmlwriter.Write_attribute_string("Plane_Count", std::to_string(plane_count));
 			xmlwriter.Write_attribute_string("Block_Count", std::to_string(ssd_summary.Block_count));
+			xmlwriter.Write_attribute_string("Total_Block_Count", std::to_string(ftl->BlockManager->Get_total_block_count()));
+			xmlwriter.Write_attribute_string("Bad_Block_Count", std::to_string(ftl->BlockManager->Get_bad_block_count()));
+			xmlwriter.Write_attribute_string("Remaining_Usable_Blocks", std::to_string(ftl->BlockManager->Get_remaining_usable_block_count()));
+			xmlwriter.Write_attribute_string("Current_OP_Ratio", std::to_string(ftl->BlockManager->Get_current_op_ratio()));
 			xmlwriter.Write_attribute_string("Min_Block_Erase_Count", std::to_string(erase_min_or_zero(ssd_summary)));
 			xmlwriter.Write_attribute_string("Max_Block_Erase_Count", std::to_string(ssd_summary.Max_erase_count));
 			xmlwriter.Write_attribute_string("Avg_Block_Erase_Count", std::to_string(erase_avg(ssd_summary)));

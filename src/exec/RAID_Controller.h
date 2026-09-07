@@ -40,10 +40,11 @@ public:
 		sim_time_type swans_epoch_default,
 		sim_time_type swans_epoch_placement,
 		sim_time_type swans_epoch_migration,
-		double swans_th_precautionary,
-		double swans_th_critical,
+		double swans_th_precautionary_write_count,
+		double swans_th_critical_write_count,
 		unsigned int swans_max_concurrent_migrations,
 		unsigned int swans_migration_buffer_limit,
+		uint64_t swans_balance_unit_bytes,
 		LHA_type total_logical_lha_count);
 
 	void Set_backend_ssds(const std::vector<SSD_Device*>& ssds);
@@ -142,12 +143,19 @@ private:
 		uint64_t State_transitions = 0;
 		uint64_t Redirect_operations = 0;
 		uint64_t Migration_operations = 0;
+		uint64_t Migration_aborted_by_eol = 0;
+		uint64_t Migration_deferred_requests_aborted_by_eol = 0;
 		uint64_t Migration_barrier_waits = 0;
 		uint64_t Buffered_requests = 0;
 		uint64_t Buffered_write_requests = 0;
 		uint64_t Buffered_write_sectors = 0;
 		uint64_t Replay_requests = 0;
+		uint64_t Replay_requests_reblocked = 0;
 		uint64_t Buffered_write_completions = 0;
+		uint64_t Migration_waiting_read_requests = 0;
+		uint64_t Migration_waiting_write_requests = 0;
+		sim_time_type Migration_total_waiting_time = 0;
+		sim_time_type Migration_max_waiting_time = 0;
 		uint64_t Background_read_ios = 0;
 		uint64_t Background_write_ios = 0;
 		uint64_t Source_discard_requests = 0;
@@ -176,6 +184,7 @@ private:
 	unsigned int ssd_count;
 	unsigned int stripe_unit_lba;
 	uint64_t swans_zone_size_lba;
+	uint64_t swans_balance_unit_bytes;
 	std::function<void(unsigned int, SSD_Components::User_Request*)> submit_callback;
 	std::function<void(SSD_Components::User_Request*)> complete_callback;
 	std::unordered_map<io_request_id_type, Inflight_Entry> inflight;
@@ -212,6 +221,7 @@ private:
 	bool Maybe_apply_redirect(uint64_t zone_id);
 	std::vector<RAID_Policy::MigrationTask> Build_migration_tasks(const std::vector<RAID_Policy::MigrationOp>& ops) const;
 	bool Has_inflight_user_io_on_migrating_zone() const;
+	void Handle_end_of_life();
 	void Schedule_swans_event(sim_time_type fire_time);
 	void Handle_swans_event();
 	void process_new_user_request(SSD_Components::User_Request* user_request) override;

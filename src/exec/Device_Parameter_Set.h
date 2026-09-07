@@ -41,6 +41,8 @@ public:
 	SSD_Components::Flash_Plane_Allocation_Scheme_Type Plane_Allocation_Scheme;
 	SSD_Components::Flash_Scheduling_Type Transaction_Scheduling_Policy;
 	double Overprovisioning_Ratio;//The ratio of spare space with respect to the whole available storage space of SSD
+	bool Bad_Block_Retirement_Enabled;//Retire blocks permanently after they reach Block_PE_Cycles_Limit
+	double End_of_Life_Threshold;//Remaining OP ratio at/below which the SSD reaches EOL
 	double GC_Exec_Threshold;//The threshold for the ratio of free pages that used to trigger GC
 	SSD_Components::GC_Block_Selection_Policy_Type GC_Block_Selection_Policy;
 	bool Use_Copyback_for_GC;
@@ -67,8 +69,10 @@ public:
 	sim_time_type SWANS_Epoch_Default;
 	sim_time_type SWANS_Epoch_Placement;
 	sim_time_type SWANS_Epoch_Migration;
+	// Thresholds for the population standard deviation of normalized host write bytes.
 	double SWANS_TH_Precautionary;
 	double SWANS_TH_Critical;
+	uint64_t SWANS_Balance_Unit_Bytes;
 	unsigned int SWANS_Max_Concurrent_Migrations;
 	unsigned int SWANS_Migration_Buffer_Limit;
 	unsigned int SWANS_Migration_Working_Queue_Limit;

@@ -34,7 +34,7 @@ struct MigrationOp
 struct PolicyDecision	//policy가 컨트롤러에 한 epoch마다 전달하는 정책 결정 정보
 {
 	PolicyState State = PolicyState::NORMAL;
-	double Mu = 0.0; // epoch write imbalance 표준편차
+	double Mu = 0.0; // cumulative RAID-controller write-subrequest imbalance
 	RedirectOp Redirect;
 	std::vector<MigrationOp> Migrations; // 수행할 마이그레이션 연산 목록
 };
@@ -54,7 +54,6 @@ struct MigrationTask
 {
 	MigrationOp Op;
 	std::vector<StripeCopyPlan> Copies;
-	uint64_t Moved_write_count = 0;
 };
 
 struct MigrationBuffer

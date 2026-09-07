@@ -10,6 +10,8 @@
 #include "../sim/Sim_Defs.h"
 #include "../utils/XMLWriter.h"
 #include "SSD_Device.h"
+#include "../ssd/Device_Lifecycle_Monitor.h"
+#include "../ssd/FTL.h"
 
 static const bool ENABLE_RAID_DEBUG_LOG = false;
 static const bool ENABLE_RAID_WARN_LOG = true;
@@ -75,16 +77,18 @@ RAID_Controller::RAID_Controller(const sim_object_id_type& id,
 	sim_time_type swans_epoch_default,
 	sim_time_type swans_epoch_placement,
 	sim_time_type swans_epoch_migration,
-	double swans_th_precautionary,
-	double swans_th_critical,
+	double swans_th_precautionary_write_count,
+	double swans_th_critical_write_count,
 	unsigned int swans_max_concurrent_migrations,
 	unsigned int swans_migration_buffer_limit,
+	uint64_t swans_balance_unit_bytes,
 	LHA_type total_logical_lha_count)
 	: SSD_Components::Data_Cache_Manager_Base(id, host_interface, nullptr, 1, 1, 1, 0, 0, 0, nullptr,
 			SSD_Components::Cache_Sharing_Mode::SHARED, stream_count),
 	  ssd_count(ssd_count),
 	  stripe_unit_lba(stripe_unit_lba),
 	  swans_zone_size_lba(swans_zone_size_lba),
+	  swans_balance_unit_bytes(swans_balance_unit_bytes == 0 ? 1024ULL * 1024ULL : swans_balance_unit_bytes),
 	  swans_enabled(swans_enabled),
 	  swans_epoch_default(swans_epoch_default == 0 ? 1 : swans_epoch_default),
 	  swans_epoch_placement(swans_epoch_placement == 0 ? (swans_epoch_default == 0 ? 1 : swans_epoch_default) : swans_epoch_placement),
@@ -106,6 +110,9 @@ RAID_Controller::RAID_Controller(const sim_object_id_type& id,
 	});
 
 	if (this->swans_enabled) {
+		SSD_Components::Device_Lifecycle_Monitor::Register_end_of_life_handler([this]() {
+			this->Schedule_swans_event(Simulator->Time() + 1);
+		});
 		uint64_t zone_size_lba = this->swans_zone_size_lba;
 		if (zone_size_lba == 0) {
 			const unsigned int stripes_per_zone = zone_stripe_multiplier == 0 ? 1 : zone_stripe_multiplier;
@@ -114,7 +121,7 @@ RAID_Controller::RAID_Controller(const sim_object_id_type& id,
 		try {
 			zone_directory.Initialize(ssd_count, stripe_unit_lba, zone_size_lba, zone_block_lba, total_logical_lha_count);
 			this->swans_zone_size_lba = zone_directory.Zone_size_lba();
-			wear_leveling_policy.Initialize(ssd_count, swans_th_precautionary, swans_th_critical, swans_max_concurrent_migrations);
+			wear_leveling_policy.Initialize(ssd_count, swans_th_precautionary_write_count, swans_th_critical_write_count, swans_max_concurrent_migrations, this->swans_balance_unit_bytes);
 			swans_poll_interval = std::max((sim_time_type)1, this->swans_epoch_default / (sim_time_type)20);
 			next_policy_evaluation_time = this->swans_epoch_default;
 			Schedule_swans_event(next_policy_evaluation_time);
@@ -176,20 +183,26 @@ bool RAID_Controller::Maybe_apply_redirect(uint64_t zone_id)
 		swans_trace(oss.str());
 		return false;
 	}
+	// Algorithm 2 evaluates the hottest and coldest SSD for every arriving
+	// write.  Do not keep using the pair captured at the start of the epoch:
+	// earlier redirects in the same placement epoch may already have changed
+	// the SIT ordering.
+	const unsigned int live_hot_ssd = wear_leveling_policy.Current_hottest_ssd();
+	const unsigned int live_cold_ssd = wear_leveling_policy.Current_coldest_ssd();
 	const unsigned int owner = zone_directory.Owner_ssd(zone_id);
-	if (owner != swans_last_decision.Redirect.Hot_ssd) {
+	if (live_hot_ssd == live_cold_ssd || owner != live_hot_ssd) {
 		std::ostringstream oss;
 		oss << "redirect skip zone=" << zone_id
 			<< " reason=owner_not_hot"
 			<< " owner_ssd=" << owner
-			<< " hot_ssd=" << swans_last_decision.Redirect.Hot_ssd
-			<< " cold_ssd=" << swans_last_decision.Redirect.Cold_ssd;
+			<< " hot_ssd=" << live_hot_ssd
+			<< " cold_ssd=" << live_cold_ssd;
 		swans_trace(oss.str());
 		return false;
 	}
 
 	std::vector<uint64_t> reserved;
-	uint64_t cold_zone = zone_directory.Find_empty_zone_on_ssd(swans_last_decision.Redirect.Cold_ssd, reserved);
+	uint64_t cold_zone = zone_directory.Find_empty_zone_on_ssd(live_cold_ssd, reserved);
 	if (cold_zone == RAID_Policy::INVALID_ZONE_ID || cold_zone == zone_id || zone_directory.Is_migrating(cold_zone)) {
 		std::ostringstream oss;
 		oss << "redirect skip zone=" << zone_id
@@ -204,8 +217,8 @@ bool RAID_Controller::Maybe_apply_redirect(uint64_t zone_id)
 	{
 		std::ostringstream oss;
 		oss << "redirect apply logical_zone=" << zone_id
-			<< " from_hot_ssd=" << swans_last_decision.Redirect.Hot_ssd
-			<< " to_cold_ssd=" << swans_last_decision.Redirect.Cold_ssd
+			<< " from_hot_ssd=" << live_hot_ssd
+			<< " to_cold_ssd=" << live_cold_ssd
 			<< " swapped_with_zone=" << cold_zone
 			<< " reason=empty_zone&&owner_hot";
 		swans_trace(oss.str());
@@ -226,6 +239,7 @@ std::vector<RAID_Sub_Request> RAID_Controller::Split(LHA_type lba, unsigned int 
 	if (swans_enabled && zone_directory.Is_initialized()) {
 		LHA_type current_lba = lba;
 		unsigned int remaining = lba_count;
+		std::vector<uint64_t> counted_zone_ids;
 		while (remaining > 0) {
 			RAID_Policy::ZoneResolveResult resolved;
 			zone_directory.Resolve(current_lba, resolved);
@@ -239,8 +253,14 @@ std::vector<RAID_Sub_Request> RAID_Controller::Split(LHA_type lba, unsigned int 
 			}
 
 			if (type == SSD_Components::UserRequestType::WRITE) {
-				zone_directory.Observe_write(stream_id, zone_id, resolved.Zone_lba_offset, chunk);
-				wear_leveling_policy.Observe_host_write(resolved.Disk_id, 1);
+				const bool first_touch_in_request =
+					std::find(counted_zone_ids.begin(), counted_zone_ids.end(), zone_id) == counted_zone_ids.end();
+				zone_directory.Observe_write(stream_id, zone_id, resolved.Zone_lba_offset, chunk, first_touch_in_request);
+				if (first_touch_in_request) {
+					counted_zone_ids.push_back(zone_id);
+				}
+				wear_leveling_policy.Observe_host_write(resolved.Disk_id,
+					static_cast<uint64_t>(chunk) * SECTOR_SIZE_IN_BYTE);
 			}
 
 			parts.push_back({ resolved.Disk_id, resolved.Local_lba, chunk, zone_id, resolved.Stripe_offset });
@@ -293,7 +313,6 @@ io_request_id_type RAID_Controller::Submit_background_copy(const RAID_Policy::St
 	if (!submit_callback) {
 		return io_request_id_type();
 	}
-
 	SSD_Components::User_Request* req = new SSD_Components::User_Request;
 	req->Priority_class = IO_Flow_Priority_Class::Priority::LOW;
 	req->Start_LBA = is_write ? copy.Destination_lba : copy.Source_lba;
@@ -319,7 +338,6 @@ io_request_id_type RAID_Controller::Submit_background_copy(const RAID_Policy::St
 
 	if (is_write) {
 		swans_stats.Background_write_ios++;
-		wear_leveling_policy.Observe_migration_write(metadata.Disk_id, copy.Lba_count);
 	} else {
 		swans_stats.Background_read_ios++;
 	}
@@ -348,13 +366,19 @@ void RAID_Controller::Observe_buffered_hot_write(const RAID_Policy::MigrationTas
 
 	LHA_type current_lba = request->Start_LBA;
 	unsigned int remaining = request->SizeInSectors;
+	bool counted_hot_zone_touch = false;
 	while (remaining > 0) {
 		RAID_Policy::ZoneResolveResult resolved;
 		zone_directory.Resolve(current_lba, resolved);
 		const unsigned int chunk = Swans_mapping_chunk_length(resolved, remaining);
 		if (resolved.Zone_id == task.Op.Hot_zone && chunk > 0) {
-			zone_directory.Observe_write(request->Stream_id, resolved.Zone_id, resolved.Zone_lba_offset, chunk);
-			wear_leveling_policy.Observe_host_write(task.Op.Cold_ssd, 1);
+			zone_directory.Observe_write(request->Stream_id, resolved.Zone_id, resolved.Zone_lba_offset, chunk,
+				!counted_hot_zone_touch);
+			if (!counted_hot_zone_touch) {
+				counted_hot_zone_touch = true;
+			}
+			wear_leveling_policy.Observe_host_write(task.Op.Cold_ssd,
+				static_cast<uint64_t>(chunk) * SECTOR_SIZE_IN_BYTE);
 			if (task.Op.Cold_ssd < per_ssd_stats.size()) {
 				per_ssd_stats[task.Op.Cold_ssd].Attributed_host_write_sectors += chunk;
 			}
@@ -518,7 +542,6 @@ std::vector<RAID_Policy::MigrationTask> RAID_Controller::Build_migration_tasks(c
 		}
 		RAID_Policy::MigrationTask task;
 		task.Op = op;
-		task.Moved_write_count = zone_directory.Zone_write_count(op.Hot_zone);
 		for (std::map<stream_id_type, std::vector<unsigned int>>::const_iterator stream_it = blocks_by_stream.begin();
 			stream_it != blocks_by_stream.end(); ++stream_it) {
 			task.Copies.reserve(task.Copies.size() + stream_it->second.size());
@@ -562,6 +585,17 @@ bool RAID_Controller::Has_inflight_user_io_on_migrating_zone() const
 	return false;
 }
 
+void RAID_Controller::Handle_end_of_life()
+{
+	if (!migration_executor.Has_inflight()) {
+		return;
+	}
+	const RAID_Policy::MigrationExecutor::AbortSummary summary = migration_executor.Abort_all(zone_directory);
+	swans_stats.Migration_aborted_by_eol += summary.Task_count;
+	swans_stats.Migration_deferred_requests_aborted_by_eol += summary.Deferred_request_count;
+	swans_trace("migration abort reason=end_of_life task_count=" + std::to_string(summary.Task_count));
+}
+
 void RAID_Controller::Notify_sub_request_completed(SSD_Components::User_Request* sub_request)
 {
 	sim_time_type now = Simulator->Time();
@@ -576,10 +610,24 @@ void RAID_Controller::Notify_sub_request_completed(SSD_Components::User_Request*
 	subrequest_metadata_by_id.erase(metadata_it);
 
 	if (metadata.Is_background) {
+		// Migration must contribute only the destination LBA range that actually
+		// completed. Do not transfer historical host-write bytes from the source.
+		if (metadata.Migration_is_write) {
+			wear_leveling_policy.Observe_completed_migration_write(metadata.Disk_id,
+				static_cast<uint64_t>(metadata.Size_in_sectors) * SECTOR_SIZE_IN_BYTE);
+		}
 		if (migration_executor.Notify_request_completed(sub_request->ID, zone_directory)) {
 			Schedule_swans_event(now + 1);
 		}
 		return;
+	}
+
+	// A migration may be waiting for user I/O that was issued before its zones
+	// were marked.  The completion event is the precise wake-up signal; polling
+	// at a short epoch-derived interval creates millions of no-op events while
+	// a flash command is executing.
+	if (swans_enabled && migration_executor.Has_inflight()) {
+		Schedule_swans_event(now + 1);
 	}
 
 	SSD_Components::User_Request* original_request = metadata.Parent;
@@ -698,7 +746,7 @@ void RAID_Controller::Try_replay_blocked_requests()
 				migration_executor.Maybe_intercept(request, zones, zone_directory,
 					[this](const RAID_Policy::MigrationTask& task, const SSD_Components::User_Request* buffered_request) {
 						this->Observe_buffered_hot_write(task, buffered_request);
-					});
+					}, Simulator->Time());
 			if (intercepted == RAID_Policy::MigrationExecutor::InterceptResult::SUBMITTED) {
 				Submit(request);
 				continue;
@@ -745,6 +793,10 @@ void RAID_Controller::Handle_swans_event()
 	if (!swans_enabled) {
 		return;
 	}
+	if (SSD_Components::Device_Lifecycle_Monitor::Has_reached_end_of_life()) {
+		Handle_end_of_life();
+		return;
+	}
 
 	sim_time_type now = Simulator->Time();
 	if (migration_executor.Has_inflight()) {
@@ -752,7 +804,8 @@ void RAID_Controller::Handle_swans_event()
 		// dispatched before the mark drain before the first source copy begins.
 		if (Has_inflight_user_io_on_migrating_zone()) {
 			swans_stats.Migration_barrier_waits++;
-			Schedule_swans_event(now + swans_poll_interval);
+			// Notify_sub_request_completed schedules the next event when the
+			// last pre-migration user request makes progress.
 			return;
 		}
 		migration_executor.Poll(zone_directory,
@@ -761,14 +814,32 @@ void RAID_Controller::Handle_swans_event()
 			},
 			[this](const RAID_Policy::StripeCopyPlan& copy, uint64_t task_index) -> bool {
 				return this->Discard_migration_source(copy, task_index);
-			},
-			[this](const RAID_Policy::MigrationTask& task, uint64_t moved_write_count) {
-				this->wear_leveling_policy.Transfer_writes(task.Op.Hot_ssd, task.Op.Cold_ssd, moved_write_count);
 			});
 
 		std::vector<RAID_Policy::MigrationExecutor::DeferredRequest> replay = migration_executor.Drain_replay_requests();
 		for (size_t i = 0; i < replay.size(); i++) {
+			if (replay[i].Request != nullptr && migration_executor.Has_inflight()) {
+				const std::vector<uint64_t> zones = Collect_zone_ids(replay[i].Request->Start_LBA, replay[i].Request->SizeInSectors);
+				if (migration_executor.Intersects_inflight_zones(zones)) {
+					// This request may have been released by one completed task while
+					// still touching another migrating zone.  Keep it out of the
+					// normal mapping path until every currently active zone is stable.
+					blocked_user_requests.push_back(replay[i].Request);
+					swans_stats.Replay_requests_reblocked++;
+					continue;
+				}
+			}
 			swans_stats.Replay_requests++;
+			const sim_time_type wait_time = now >= replay[i].Enqueue_time ? now - replay[i].Enqueue_time : 0;
+			swans_stats.Migration_total_waiting_time += wait_time;
+			if (wait_time > swans_stats.Migration_max_waiting_time) {
+				swans_stats.Migration_max_waiting_time = wait_time;
+			}
+			if (replay[i].Request != nullptr && replay[i].Request->Type == SSD_Components::UserRequestType::READ) {
+				swans_stats.Migration_waiting_read_requests++;
+			} else {
+				swans_stats.Migration_waiting_write_requests++;
+			}
 			if (replay[i].Complete_without_dispatch) {
 				swans_stats.Buffered_write_completions++;
 				Complete_buffered_user_request(replay[i].Request);
@@ -778,7 +849,12 @@ void RAID_Controller::Handle_swans_event()
 		}
 
 		if (migration_executor.Has_inflight()) {
-			Schedule_swans_event(now + swans_poll_interval);
+			if (!migration_executor.Has_active_copy()) {
+				// The executor has no submitted copy (for example a future
+				// resource-admission retry). Advance it once without spinning
+				// while a real flash request is outstanding.
+				Schedule_swans_event(now + swans_poll_interval);
+			}
 			return;
 		}
 	}
@@ -918,7 +994,7 @@ void RAID_Controller::process_new_user_request(SSD_Components::User_Request* use
 			migration_executor.Maybe_intercept(user_request, zones, zone_directory,
 				[this](const RAID_Policy::MigrationTask& task, const SSD_Components::User_Request* buffered_request) {
 					this->Observe_buffered_hot_write(task, buffered_request);
-				});
+				}, Simulator->Time());
 		if (intercepted == RAID_Policy::MigrationExecutor::InterceptResult::BUFFERED) {
 			swans_stats.Buffered_requests++;
 			if (user_request->Type == SSD_Components::UserRequestType::WRITE) {
@@ -1028,7 +1104,11 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 
 	xmlwriter.Write_attribute_string("SWANS_Enabled", swans_enabled ? "true" : "false");
 	xmlwriter.Write_attribute_string("SWANS_State", swans_state_to_string(swans_policy_state));
+	// Mu is calculated from completed logical write bytes normalized by
+	// SWANS_Balance_Unit_Bytes; keep the exported label aligned with the metric.
+	xmlwriter.Write_attribute_string("SWANS_Mu_Unit", "write_bytes_normalized_by_balance_unit");
 	xmlwriter.Write_attribute_string("SWANS_Last_Mu", std::to_string(swans_stats.Last_mu));
+	xmlwriter.Write_attribute_string("SWANS_Final_Mu_SDW", std::to_string(wear_leveling_policy.Current_mu()));
 	xmlwriter.Write_attribute_string("SWANS_Epoch_Evaluations", std::to_string(swans_stats.Epoch_evaluations));
 	xmlwriter.Write_attribute_string("SWANS_Normal_Epochs", std::to_string(swans_stats.Normal_epochs));
 	xmlwriter.Write_attribute_string("SWANS_Redirect_Epochs", std::to_string(swans_stats.Redirect_epochs));
@@ -1036,13 +1116,25 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 	xmlwriter.Write_attribute_string("SWANS_State_Transitions", std::to_string(swans_stats.State_transitions));
 	xmlwriter.Write_attribute_string("SWANS_Redirect_Operations", std::to_string(swans_stats.Redirect_operations));
 	xmlwriter.Write_attribute_string("SWANS_Migration_Operations", std::to_string(swans_stats.Migration_operations));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Aborted_By_EOL", std::to_string(swans_stats.Migration_aborted_by_eol));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Deferred_Requests_Aborted_By_EOL", std::to_string(swans_stats.Migration_deferred_requests_aborted_by_eol));
 	xmlwriter.Write_attribute_string("SWANS_Migration_Barrier_Waits", std::to_string(swans_stats.Migration_barrier_waits));
 	xmlwriter.Write_attribute_string("SWANS_Migration_History_Count", std::to_string(swans_migration_history.size()));
 	xmlwriter.Write_attribute_string("SWANS_Buffered_Requests", std::to_string(swans_stats.Buffered_requests));
 	xmlwriter.Write_attribute_string("SWANS_DMH_Buffered_Write_Requests", std::to_string(swans_stats.Buffered_write_requests));
 	xmlwriter.Write_attribute_string("SWANS_DMH_Buffered_Write_Sectors", std::to_string(swans_stats.Buffered_write_sectors));
 	xmlwriter.Write_attribute_string("SWANS_Replay_Requests", std::to_string(swans_stats.Replay_requests));
+	xmlwriter.Write_attribute_string("SWANS_Replay_Requests_Reblocked", std::to_string(swans_stats.Replay_requests_reblocked));
 	xmlwriter.Write_attribute_string("SWANS_Buffered_Write_Completions", std::to_string(swans_stats.Buffered_write_completions));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Waiting_Read_Requests", std::to_string(swans_stats.Migration_waiting_read_requests));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Waiting_Write_Requests", std::to_string(swans_stats.Migration_waiting_write_requests));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Total_Waiting_Time_us", std::to_string(to_us(swans_stats.Migration_total_waiting_time)));
+	const uint64_t migration_waiting_requests = swans_stats.Migration_waiting_read_requests
+		+ swans_stats.Migration_waiting_write_requests;
+	xmlwriter.Write_attribute_string("SWANS_Migration_Average_Waiting_Time_us",
+		std::to_string(migration_waiting_requests == 0 ? 0.0
+			: to_us(swans_stats.Migration_total_waiting_time) / static_cast<double>(migration_waiting_requests)));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Max_Waiting_Time_us", std::to_string(to_us(swans_stats.Migration_max_waiting_time)));
 	xmlwriter.Write_attribute_string("SWANS_Background_Read_IOs", std::to_string(swans_stats.Background_read_ios));
 	xmlwriter.Write_attribute_string("SWANS_Background_Write_IOs", std::to_string(swans_stats.Background_write_ios));
 	xmlwriter.Write_attribute_string("SWANS_Source_Discard_Requests", std::to_string(swans_stats.Source_discard_requests));
@@ -1061,6 +1153,57 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 	xmlwriter.Write_attribute_string("SWANS_Mapping_Entries", std::to_string(zone_directory.Zone_count()));
 	xmlwriter.Write_attribute_string("SWANS_Mapping_Duplicate_Physical_Locations",
 		std::to_string(zone_directory.Duplicate_physical_location_count()));
+
+	const uint64_t actual_write_bytes = wear_leveling_policy.Total_actual_write_bytes();
+	std::string policy_stats_tag = tag + ".SWANSPolicyStatistics";
+	xmlwriter.Write_open_tag(policy_stats_tag);
+	xmlwriter.Write_attribute_string("Statistics_Domain", "COMPLETED_LOGICAL_LBA_WRITES");
+	xmlwriter.Write_attribute_string("Count_Unit", "byte");
+	xmlwriter.Write_attribute_string("Balance_Unit_Bytes", std::to_string(wear_leveling_policy.Balance_unit_bytes()));
+	xmlwriter.Write_attribute_string("Threshold_Unit", "balance_unit");
+	xmlwriter.Write_attribute_string("Mu_Calculation", "population_standard_deviation");
+	xmlwriter.Write_attribute_string("Precautionary_Threshold",
+		std::to_string(wear_leveling_policy.Precautionary_threshold()));
+	xmlwriter.Write_attribute_string("Critical_Threshold",
+		std::to_string(wear_leveling_policy.Critical_threshold()));
+	xmlwriter.Write_attribute_string("Last_Mu", std::to_string(swans_stats.Last_mu));
+	xmlwriter.Write_attribute_string("Final_Mu_SDW", std::to_string(wear_leveling_policy.Current_mu()));
+	xmlwriter.Write_attribute_string("Total_Observed_Host_Write_Bytes",
+		std::to_string(wear_leveling_policy.Total_observed_host_write_bytes()));
+	xmlwriter.Write_attribute_string("Total_Completed_Migration_Write_Bytes",
+		std::to_string(wear_leveling_policy.Total_observed_migration_write_bytes()));
+	xmlwriter.Write_attribute_string("Total_Actual_Write_Bytes", std::to_string(actual_write_bytes));
+	for (unsigned int disk_id = 0; disk_id < ssd_count; disk_id++) {
+		std::string policy_ssd_tag = policy_stats_tag + ".SSD";
+		xmlwriter.Write_open_tag(policy_ssd_tag);
+		xmlwriter.Write_attribute_string("SSD_ID", std::to_string(disk_id));
+		xmlwriter.Write_attribute_string("Actual_Write_Bytes",
+			std::to_string(wear_leveling_policy.Actual_write_bytes(disk_id)));
+		xmlwriter.Write_attribute_string("Observed_Host_Write_Bytes",
+			std::to_string(wear_leveling_policy.Observed_host_write_bytes(disk_id)));
+		xmlwriter.Write_attribute_string("Completed_Migration_Write_Bytes",
+			std::to_string(wear_leveling_policy.Observed_migration_write_bytes(disk_id)));
+		xmlwriter.Write_close_tag();
+	}
+	xmlwriter.Write_close_tag();
+
+	std::string physical_io_tag = tag + ".SWANSPhysicalIOStatistics";
+	xmlwriter.Write_open_tag(physical_io_tag);
+	xmlwriter.Write_attribute_string("Statistics_Domain", "COMPLETED_MIGRATION_LBA_IO_NOT_NAND");
+	xmlwriter.Write_attribute_string("NAND_Wear_Statistics_Location", "RAIDDevice.WearLeveling");
+	xmlwriter.Write_attribute_string("Total_Migration_Restore_Write_Bytes",
+		std::to_string(wear_leveling_policy.Total_observed_migration_write_bytes()));
+	for (unsigned int disk_id = 0; disk_id < ssd_count; disk_id++) {
+		std::string physical_io_ssd_tag = physical_io_tag + ".SSD";
+		xmlwriter.Write_open_tag(physical_io_ssd_tag);
+		xmlwriter.Write_attribute_string("SSD_ID", std::to_string(disk_id));
+		xmlwriter.Write_attribute_string("Host_Write_Sectors_Attributed",
+			std::to_string(Get_ssd_attributed_host_write_sectors(disk_id)));
+		xmlwriter.Write_attribute_string("Completed_Migration_Restore_Write_Bytes",
+			std::to_string(wear_leveling_policy.Observed_migration_write_bytes(disk_id)));
+		xmlwriter.Write_close_tag();
+	}
+	xmlwriter.Write_close_tag();
 
 	for (size_t i = 0; i < swans_migration_history.size(); i++) {
 		const Swans_Migration_Record& record = swans_migration_history[i];

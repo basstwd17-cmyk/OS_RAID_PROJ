@@ -8,8 +8,9 @@ namespace RAID_Policy {
 WearLevelingPolicy::WearLevelingPolicy()
 	: initialized(false),
 	  ssd_count(0),
-	  th_precautionary(0.0),
-	  th_critical(0.0),
+	  th_precautionary_write_units(0.0),
+	  th_critical_write_units(0.0),
+	  balance_unit_bytes(1024ULL * 1024ULL),
 	  max_concurrent_migrations(1),
 	  last_mu(0.0),
 	  current_state(PolicyState::NORMAL)
@@ -17,50 +18,85 @@ WearLevelingPolicy::WearLevelingPolicy()
 }
 
 void WearLevelingPolicy::Initialize(unsigned int ssd_count,
-	double th_precautionary,
-	double th_critical,
-	unsigned int max_concurrent_migrations)
+	double th_precautionary_write_units,
+	double th_critical_write_units,
+	unsigned int max_concurrent_migrations,
+	uint64_t balance_unit_bytes)
 {
 	this->ssd_count = ssd_count;
-	this->th_precautionary = th_precautionary;
-	this->th_critical = th_critical;
+	this->th_precautionary_write_units = th_precautionary_write_units;
+	this->th_critical_write_units = th_critical_write_units;
+	this->balance_unit_bytes = balance_unit_bytes == 0 ? 1024ULL * 1024ULL : balance_unit_bytes;
 	this->max_concurrent_migrations = max_concurrent_migrations == 0 ? 1 : max_concurrent_migrations;
-	epoch_writes.assign(ssd_count, 0);
-	placement_writes.assign(ssd_count, 0);
-	observed_host_writes.assign(ssd_count, 0);
-	observed_migration_writes.assign(ssd_count, 0);
+	epoch_write_bytes.assign(ssd_count, 0);
+	actual_write_bytes.assign(ssd_count, 0);
+	observed_host_write_bytes.assign(ssd_count, 0);
+	observed_migration_write_bytes.assign(ssd_count, 0);
 	last_mu = 0.0;
 	current_state = PolicyState::NORMAL;
 	initialized = true;
 }
 
-void WearLevelingPolicy::Observe_host_write(unsigned int ssd_id, unsigned int write_count)
+void WearLevelingPolicy::Observe_host_write(unsigned int ssd_id, uint64_t write_bytes)
 {
-	if (!initialized || ssd_id >= epoch_writes.size()) {
+	if (!initialized || ssd_id >= epoch_write_bytes.size() || write_bytes == 0) {
 		return;
 	}
-	epoch_writes[ssd_id] += write_count;
-	placement_writes[ssd_id] += write_count;
-	observed_host_writes[ssd_id] += write_count;
+	epoch_write_bytes[ssd_id] += write_bytes;
+	actual_write_bytes[ssd_id] += write_bytes;
+	observed_host_write_bytes[ssd_id] += write_bytes;
 }
 
-void WearLevelingPolicy::Observe_migration_write(unsigned int ssd_id, unsigned int write_sectors)
+void WearLevelingPolicy::Observe_completed_migration_write(unsigned int ssd_id, uint64_t write_bytes)
 {
-	if (!initialized || ssd_id >= observed_migration_writes.size()) {
+	if (!initialized || ssd_id >= observed_migration_write_bytes.size() || write_bytes == 0) {
 		return;
 	}
-	observed_migration_writes[ssd_id] += write_sectors;
+	epoch_write_bytes[ssd_id] += write_bytes;
+	actual_write_bytes[ssd_id] += write_bytes;
+	observed_migration_write_bytes[ssd_id] += write_bytes;
 }
 
-void WearLevelingPolicy::Transfer_writes(unsigned int from_ssd, unsigned int to_ssd, uint64_t write_count)
+uint64_t WearLevelingPolicy::Actual_write_bytes(unsigned int ssd_id) const
 {
-	if (!initialized || from_ssd >= placement_writes.size() || to_ssd >= placement_writes.size() || write_count == 0) {
-		return;
+	return ssd_id < actual_write_bytes.size() ? actual_write_bytes[ssd_id] : 0;
+}
+
+uint64_t WearLevelingPolicy::Observed_host_write_bytes(unsigned int ssd_id) const
+{
+	return ssd_id < observed_host_write_bytes.size() ? observed_host_write_bytes[ssd_id] : 0;
+}
+
+uint64_t WearLevelingPolicy::Observed_migration_write_bytes(unsigned int ssd_id) const
+{
+	return ssd_id < observed_migration_write_bytes.size() ? observed_migration_write_bytes[ssd_id] : 0;
+}
+
+uint64_t WearLevelingPolicy::Total_actual_write_bytes() const
+{
+	uint64_t total = 0;
+	for (uint64_t count : actual_write_bytes) {
+		total += count;
 	}
-	placement_writes[from_ssd] = placement_writes[from_ssd] > write_count
-		? placement_writes[from_ssd] - write_count
-		: 0;
-	placement_writes[to_ssd] += write_count;
+	return total;
+}
+
+uint64_t WearLevelingPolicy::Total_observed_host_write_bytes() const
+{
+	uint64_t total = 0;
+	for (uint64_t count : observed_host_write_bytes) {
+		total += count;
+	}
+	return total;
+}
+
+uint64_t WearLevelingPolicy::Total_observed_migration_write_bytes() const
+{
+	uint64_t total = 0;
+	for (uint64_t bytes : observed_migration_write_bytes) {
+		total += bytes;
+	}
+	return total;
 }
 
 bool WearLevelingPolicy::Has_epoch_writes() const
@@ -68,32 +104,31 @@ bool WearLevelingPolicy::Has_epoch_writes() const
 	if (!initialized) {
 		return false;
 	}
-	for (size_t i = 0; i < epoch_writes.size(); i++) {
-		if (epoch_writes[i] > 0) {
+	for (size_t i = 0; i < epoch_write_bytes.size(); i++) {
+		if (epoch_write_bytes[i] > 0) {
 			return true;
 		}
 	}
 	return false;
 }
-// SIT-style cumulative write-request share imbalance. Unit: percentage points.
+// Actual completed host and migration-destination LBA writes. Values are
+// normalized to the configured unit before comparison with the thresholds.
 double WearLevelingPolicy::Compute_stddev() const
 {
 	if (!initialized || ssd_count == 0) {
 		return 0.0;
 	}
-	uint64_t total = 0;
+	double mean = 0.0;
 	for (unsigned int i = 0; i < ssd_count; i++) {
-		total += placement_writes[i];
+		mean += static_cast<double>(actual_write_bytes[i]) / static_cast<double>(balance_unit_bytes);
 	}
-	if (total == 0) {
+	if (mean == 0.0) {
 		return 0.0;
 	}
-
-	const double mean_share = 100.0 / (double)ssd_count;
+	mean /= static_cast<double>(ssd_count);
 	double variance = 0.0;
 	for (unsigned int i = 0; i < ssd_count; i++) {
-		const double share = 100.0 * (double)placement_writes[i] / (double)total;
-		const double diff = share - mean_share;
+		const double diff = static_cast<double>(actual_write_bytes[i]) / static_cast<double>(balance_unit_bytes) - mean;
 		variance += diff * diff;
 	}
 	variance /= (double)ssd_count;
@@ -105,9 +140,9 @@ unsigned int WearLevelingPolicy::Pick_hottest_ssd() const
 	unsigned int selected = 0;
 	uint64_t best = 0;
 	for (unsigned int i = 0; i < ssd_count; i++) {
-		if (i == 0 || placement_writes[i] > best) {
+		if (i == 0 || actual_write_bytes[i] > best) {
 			selected = i;
-			best = placement_writes[i];
+			best = actual_write_bytes[i];
 		}
 	}
 	return selected;
@@ -118,9 +153,9 @@ unsigned int WearLevelingPolicy::Pick_coldest_ssd() const
 	unsigned int selected = 0;
 	uint64_t best = 0;
 	for (unsigned int i = 0; i < ssd_count; i++) {
-		if (i == 0 || placement_writes[i] < best) {
+		if (i == 0 || actual_write_bytes[i] < best) {
 			selected = i;
-			best = placement_writes[i];
+			best = actual_write_bytes[i];
 		}
 	}
 	return selected;
@@ -128,8 +163,8 @@ unsigned int WearLevelingPolicy::Pick_coldest_ssd() const
 
 void WearLevelingPolicy::Reset_epoch()
 {
-	for (unsigned int i = 0; i < epoch_writes.size(); i++) {
-		epoch_writes[i] = 0;
+	for (unsigned int i = 0; i < epoch_write_bytes.size(); i++) {
+		epoch_write_bytes[i] = 0;
 	}
 }
 
@@ -157,14 +192,14 @@ PolicyDecision WearLevelingPolicy::Evaluate(const ZoneDirectory& directory)
 		return decision;
 	}
 
-	if (decision.Mu < th_precautionary) {	// ->NORMAL
+	if (decision.Mu < th_precautionary_write_units) {	// ->NORMAL
 		decision.State = PolicyState::NORMAL;
 		current_state = decision.State;
 		Reset_epoch();
 		return decision;
 	}
 
-	if (decision.Mu < th_critical) {	// -> REDIRECT + Redirect.Vaild=true + hot/cold SSD 세팅
+	if (decision.Mu < th_critical_write_units) {	// -> REDIRECT + Redirect.Valid=true + hot/cold SSD 설정
 		decision.State = PolicyState::REDIRECT;
 		decision.Redirect.Valid = true;
 		decision.Redirect.Hot_ssd = hot_ssd;
@@ -193,13 +228,15 @@ PolicyDecision WearLevelingPolicy::Evaluate(const ZoneDirectory& directory)
 		reserved.push_back(hot_zone);
 		reserved.push_back(cold_zone);
 	}
-	if (decision.Migrations.empty()) {	// vaild 못만들면 REDIRECT 실행행
+	// Actual migration writes can make an SSD the byte-hot member even when it
+	// has no movable host-data zone. In that case, redirect future writes rather
+	// than repeatedly scheduling an empty migration epoch.
+	if (decision.Migrations.empty()) {
 		decision.State = PolicyState::REDIRECT;
 		decision.Redirect.Valid = true;
 		decision.Redirect.Hot_ssd = hot_ssd;
 		decision.Redirect.Cold_ssd = cold_ssd;
 	}
-
 	current_state = decision.State;
 	Reset_epoch(); 
 	return decision;

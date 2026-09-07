@@ -446,6 +446,9 @@ void IO_Flow_Parameter_Set_Trace_Based::XML_deserialize(rapidxml::xml_node<> *no
 			if (strcmp(param->name(), "Relay_Count") == 0) {
 				std::string val = param->value();
 				Relay_Count = std::stoi(val);
+				if (Relay_Count < 0) {
+					PRINT_ERROR("Relay_Count must be zero (repeat until EOL) or a positive fixed replay count")
+				}
 			} else if (strcmp(param->name(), "Percentage_To_Be_Executed") == 0) {
 				std::string val = param->value();
 				Percentage_To_Be_Executed = std::stoi(val);

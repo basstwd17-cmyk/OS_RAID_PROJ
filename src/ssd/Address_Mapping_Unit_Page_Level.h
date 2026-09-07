@@ -6,6 +6,7 @@
 #include <queue>
 #include <set>
 #include <list>
+#include <vector>
 #include "Address_Mapping_Unit_Base.h"
 #include "Flash_Block_Manager_Base.h"
 #include "SSD_Defs.h"
@@ -39,6 +40,27 @@ namespace SSD_Components
 		PPA_type PPA;
 		uint64_t WrittenStateBitmap;
 		data_timestamp_type TimeStamp;
+	};
+
+	struct Barrier_Owner
+	{
+		flash_channel_ID_type Channel_id;
+		flash_chip_ID_type Chip_id;
+		flash_die_ID_type Die_id;
+		flash_plane_ID_type Plane_id;
+		flash_block_ID_type Block_id;
+		sim_time_type Lock_time;
+
+		Barrier_Owner(const NVM::FlashMemory::Physical_Page_Address& block_address, sim_time_type lock_time)
+			: Channel_id(block_address.ChannelID), Chip_id(block_address.ChipID), Die_id(block_address.DieID),
+			  Plane_id(block_address.PlaneID), Block_id(block_address.BlockID), Lock_time(lock_time) {}
+
+		bool Matches(const NVM::FlashMemory::Physical_Page_Address& block_address) const
+		{
+			return Channel_id == block_address.ChannelID && Chip_id == block_address.ChipID
+				&& Die_id == block_address.DieID && Plane_id == block_address.PlaneID
+				&& Block_id == block_address.BlockID;
+		}
 	};
 	
 	class Cached_Mapping_Table
@@ -105,11 +127,12 @@ namespace SSD_Components
 		std::multimap<LPA_type, NVM_Transaction_Flash*> Waiting_unmapped_program_transactions;
 		std::multimap<MVPN_type, LPA_type> ArrivingMappingEntries;
 		std::set<MVPN_type> DepartingMappingEntries;
-			std::set<LPA_type> Locked_LPAs;//Used to manage race conditions, i.e. a user request accesses and LPA while GC is moving that LPA 
-			std::set<MVPN_type> Locked_MVPNs;//Used to manage race conditions
+		std::map<LPA_type, std::vector<Barrier_Owner>> Locked_LPAs;//Each entry keeps the GC/WL block(s) that own the LPA barrier
+		std::map<MVPN_type, std::vector<Barrier_Owner>> Locked_MVPNs;//Each entry keeps the GC/WL block(s) that own the MVPN barrier
 			std::map<LPA_type, page_status_type> Pending_discard_masks;
 			std::multimap<LPA_type, NVM_Transaction_Flash*> Read_transactions_behind_LPA_barrier;
 		std::multimap<LPA_type, NVM_Transaction_Flash*> Write_transactions_behind_LPA_barrier;
+		std::map<NVM_Transaction_Flash*, sim_time_type> User_transaction_barrier_wait_start_times;
 		std::set<MVPN_type> MVPN_read_transactions_waiting_behind_barrier;
 		std::set<MVPN_type> MVPN_write_transaction_waiting_behind_barrier;
 
@@ -162,9 +185,14 @@ namespace SSD_Components
 		NVM::FlashMemory::Physical_Page_Address Convert_ppa_to_address(const PPA_type ppa);
 		void Convert_ppa_to_address(const PPA_type ppn, NVM::FlashMemory::Physical_Page_Address& address);
 		PPA_type Convert_address_to_ppa(const NVM::FlashMemory::Physical_Page_Address& pageAddress);
+		Barrier_Statistics Get_barrier_statistics() const override;
+		Free_Block_Pool_Statistics Get_free_block_pool_statistics() const override;
 
 		void Set_barrier_for_accessing_physical_block(const NVM::FlashMemory::Physical_Page_Address& block_address);
-		void Set_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa);
+		void Set_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa, const NVM::FlashMemory::Physical_Page_Address& owner_block_address);
+		void Set_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mvpn, const NVM::FlashMemory::Physical_Page_Address& owner_block_address);
+		void Remove_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa, const NVM::FlashMemory::Physical_Page_Address& owner_block_address);
+		void Remove_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mvpn, const NVM::FlashMemory::Physical_Page_Address& owner_block_address);
 		void Set_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mpvn);
 	void Remove_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa);
 	void Remove_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mpvn);
@@ -188,6 +216,8 @@ namespace SSD_Components
 		void generate_flash_writeback_request_for_mapping_data(const stream_id_type streamID, const LPA_type lpn);
 
 		unsigned int no_of_translation_entries_per_page;
+		Barrier_Statistics barrier_statistics;
+		Free_Block_Pool_Statistics free_block_pool_statistics;
 		MVPN_type get_MVPN(const LPA_type lpn, stream_id_type stream_id);
 		LPA_type get_start_LPN_in_MVP(const MVPN_type);
 		LPA_type get_end_LPN_in_MVP(const MVPN_type);

@@ -23,6 +23,8 @@ Device_Parameter_Set::Device_Parameter_Set()
 	  Plane_Allocation_Scheme(SSD_Components::Flash_Plane_Allocation_Scheme_Type::CWDP),
 	  Transaction_Scheduling_Policy(SSD_Components::Flash_Scheduling_Type::OUT_OF_ORDER),
 	  Overprovisioning_Ratio(0.07),
+	  Bad_Block_Retirement_Enabled(true),
+	  End_of_Life_Threshold(0.05),
 	  GC_Exec_Threshold(0.05),
 	  GC_Block_Selection_Policy(SSD_Components::GC_Block_Selection_Policy_Type::RGA),
 	  Use_Copyback_for_GC(false),
@@ -50,6 +52,7 @@ Device_Parameter_Set::Device_Parameter_Set()
 	  SWANS_Epoch_Migration(40000000000ULL),
 	  SWANS_TH_Precautionary(5.0),
 	  SWANS_TH_Critical(15.0),
+	  SWANS_Balance_Unit_Bytes(1024ULL * 1024ULL),
 	  SWANS_Max_Concurrent_Migrations(1),
 	  SWANS_Migration_Buffer_Limit(64),
 	  SWANS_Migration_Working_Queue_Limit(64),
@@ -293,6 +296,14 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 	val = std::to_string(Overprovisioning_Ratio);
 	xmlwriter.Write_attribute_string(attr, val);
 
+	attr = "Bad_Block_Retirement_Enabled";
+	val = (Bad_Block_Retirement_Enabled ? "true" : "false");
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "End_of_Life_Threshold";
+	val = std::to_string(End_of_Life_Threshold);
+	xmlwriter.Write_attribute_string(attr, val);
+
 	attr = "GC_Exec_Threshold";
 	val = std::to_string(GC_Exec_Threshold);
 	xmlwriter.Write_attribute_string(attr, val);
@@ -427,6 +438,10 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 
 	attr = "SWANS_TH_Critical";
 	val = std::to_string(SWANS_TH_Critical);
+	xmlwriter.Write_attribute_string(attr, val);
+
+	attr = "SWANS_Balance_Unit_Bytes";
+	val = std::to_string(SWANS_Balance_Unit_Bytes);
 	xmlwriter.Write_attribute_string(attr, val);
 
 	attr = "SWANS_Max_Concurrent_Migrations";
@@ -629,6 +644,19 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 				if(Overprovisioning_Ratio < 0.05) {
 					PRINT_MESSAGE("The specified overprovisioning ratio is too small. The simluation may not run correctly.")
 				}
+			} else if (strcmp(param->name(), "Bad_Block_Retirement_Enabled") == 0) {
+				std::string val = param->value();
+				std::transform(val.begin(), val.end(), val.begin(), ::toupper);
+				if (val == "TRUE") {
+					Bad_Block_Retirement_Enabled = true;
+				} else if (val == "FALSE") {
+					Bad_Block_Retirement_Enabled = false;
+				} else {
+					PRINT_ERROR("Bad_Block_Retirement_Enabled must be true or false")
+				}
+			} else if (strcmp(param->name(), "End_of_Life_Threshold") == 0) {
+				std::string val = param->value();
+				End_of_Life_Threshold = std::stod(val);
 			} else if (strcmp(param->name(), "GC_Exec_Threshold") == 0) {
 				std::string val = param->value();
 				GC_Exec_Threshold = std::stod(val);
@@ -740,6 +768,9 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 			} else if (strcmp(param->name(), "SWANS_TH_Critical") == 0) {
 				std::string val = param->value();
 				SWANS_TH_Critical = std::stod(val);
+			} else if (strcmp(param->name(), "SWANS_Balance_Unit_Bytes") == 0) {
+				std::string val = param->value();
+				SWANS_Balance_Unit_Bytes = std::stoull(val);
 			} else if (strcmp(param->name(), "SWANS_Max_Concurrent_Migrations") == 0) {
 				std::string val = param->value();
 				SWANS_Max_Concurrent_Migrations = std::stoul(val);
@@ -759,6 +790,12 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 			{
 				Flash_Parameters.XML_deserialize(param);
 			}
+		}
+		if (End_of_Life_Threshold < 0.0 || End_of_Life_Threshold >= Overprovisioning_Ratio) {
+			PRINT_ERROR("End_of_Life_Threshold must be non-negative and smaller than Overprovisioning_Ratio")
+		}
+		if (Bad_Block_Retirement_Enabled && Flash_Parameters.Block_PE_Cycles_Limit == 0) {
+			PRINT_ERROR("Block_PE_Cycles_Limit must be positive when bad-block retirement is enabled")
 		}
 	}
 	catch (...)

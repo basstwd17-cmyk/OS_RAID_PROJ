@@ -909,6 +909,45 @@ namespace SSD_Components
 		val = std::to_string(Stats::Total_page_movements_for_wl);
 		xmlwriter.Write_attribute_string_inline(attr, val);
 
+		const Barrier_Statistics barrier_statistics = Address_Mapping_Unit == NULL ? Barrier_Statistics() : Address_Mapping_Unit->Get_barrier_statistics();
+		const Free_Block_Pool_Statistics free_block_pool_statistics = Address_Mapping_Unit == NULL ? Free_Block_Pool_Statistics() : Address_Mapping_Unit->Get_free_block_pool_statistics();
+		attr = "Free_Block_Pool_Deferred_Program_Transactions";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(free_block_pool_statistics.Deferred_program_transactions));
+		attr = "Free_Block_Pool_Resumed_Program_Transactions";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(free_block_pool_statistics.Resumed_program_transactions));
+		attr = "Free_Block_Pool_Current_Deferred_Program_Transactions";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(free_block_pool_statistics.Current_deferred_program_transactions));
+		attr = "Free_Block_Pool_Maximum_Deferred_Program_Transactions";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(free_block_pool_statistics.Maximum_deferred_program_transactions));
+		attr = "GC_LPA_Barrier_Lock_Acquisitions";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.LPA_lock_acquisitions));
+		attr = "GC_LPA_Barrier_Lock_Releases";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.LPA_lock_releases));
+		attr = "GC_MVPN_Barrier_Lock_Acquisitions";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.MVPN_lock_acquisitions));
+		attr = "GC_MVPN_Barrier_Lock_Releases";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.MVPN_lock_releases));
+		attr = "GC_Barrier_Overlapping_LPA_Locks";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Overlapping_LPA_locks));
+		attr = "GC_Barrier_Overlapping_MVPN_Locks";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Overlapping_MVPN_locks));
+		attr = "GC_Barrier_Duplicate_Owner_Locks";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Duplicate_owner_locks));
+		attr = "GC_Barrier_Unmatched_LPA_Unlocks";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Unmatched_LPA_unlocks));
+		attr = "GC_Barrier_Unmatched_MVPN_Unlocks";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Unmatched_MVPN_unlocks));
+		attr = "GC_Barrier_Owner_Mismatch_Unlocks";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Owner_mismatch_unlocks));
+		attr = "GC_Barrier_Current_LPA_Count";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Current_LPA_barriers));
+		attr = "GC_Barrier_Current_MVPN_Count";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Current_MVPN_barriers));
+		attr = "GC_Barrier_Max_User_Wait_us";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Max_user_transaction_wait_time / 1000.0));
+		attr = "GC_Barrier_Max_Lifetime_us";
+		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Max_barrier_lifetime / 1000.0));
+
 		xmlwriter.Write_end_element_tag();
 	}
 

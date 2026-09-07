@@ -57,10 +57,14 @@ public:
 class IO_Flow_Parameter_Set_Trace_Based : public IO_Flow_Parameter_Set
 {
 public:
-	IO_Flow_Parameter_Set_Trace_Based() { this->Type = Flow_Type::TRACE; }
+	IO_Flow_Parameter_Set_Trace_Based()
+		: Percentage_To_Be_Executed(100), Relay_Count(1), Time_Unit(Trace_Time_Unit::NANOSECOND)
+	{
+		this->Type = Flow_Type::TRACE;
+	}
 	std::string File_Path;
 	int Percentage_To_Be_Executed;
-	int Relay_Count; 
+	int Relay_Count;//Positive: fixed replay count; zero: repeat until EOL
 	Trace_Time_Unit Time_Unit;
 	
 	void XML_serialize(Utils::XmlWriter& xmlwriter);

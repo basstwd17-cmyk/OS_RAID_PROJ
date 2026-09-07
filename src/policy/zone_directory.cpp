@@ -204,6 +204,21 @@ uint64_t ZoneDirectory::Zone_write_count(uint64_t zone_id) const
 	return zones[static_cast<size_t>(zone_id)].Number_of_writes;
 }
 
+uint64_t ZoneDirectory::Total_zone_write_count() const
+{
+	uint64_t total = 0;
+	for (const ZoneEntry& zone : zones) {
+		total += zone.Number_of_writes;
+	}
+	return total;
+}
+
+uint64_t ZoneDirectory::Zone_written_sectors(uint64_t zone_id) const
+{
+	Validate_zone_id(zone_id);
+	return zones[static_cast<size_t>(zone_id)].Written_sectors;
+}
+
 uint64_t ZoneDirectory::Duplicate_physical_location_count() const
 {
 	if (!initialized) {
@@ -230,7 +245,8 @@ uint64_t ZoneDirectory::Migrating_zone_count() const
 	return count;
 }
 
-void ZoneDirectory::Observe_write(stream_id_type stream_id, uint64_t zone_id, uint64_t zone_lba_offset, unsigned int write_sectors)
+void ZoneDirectory::Observe_write(stream_id_type stream_id, uint64_t zone_id, uint64_t zone_lba_offset,
+	unsigned int write_sectors, bool count_host_request_zone_touch)
 {
 	Validate_zone_id(zone_id);
 	if (write_sectors == 0) {
@@ -244,7 +260,10 @@ void ZoneDirectory::Observe_write(stream_id_type stream_id, uint64_t zone_id, ui
 		throw std::out_of_range("ZoneDirectory observe write range out of zone bounds");
 	}
 	ZoneEntry& zone = zones[static_cast<size_t>(zone_id)];
-	zone.Number_of_writes++;
+	if (count_host_request_zone_touch) {
+		zone.Number_of_writes++;
+	}
+	zone.Written_sectors += write_sectors;
 	zone.Empty = false;
 
 	const uint64_t start_block = zone_lba_offset / block_unit_lba;
@@ -259,9 +278,10 @@ void ZoneDirectory::Observe_write(stream_id_type stream_id, uint64_t zone_id, ui
 	}
 }
 
-void ZoneDirectory::Observe_write(uint64_t zone_id, uint64_t zone_lba_offset, unsigned int write_sectors)
+void ZoneDirectory::Observe_write(uint64_t zone_id, uint64_t zone_lba_offset, unsigned int write_sectors,
+	bool count_host_request_zone_touch)
 {
-	Observe_write(0, zone_id, zone_lba_offset, write_sectors);
+	Observe_write(0, zone_id, zone_lba_offset, write_sectors, count_host_request_zone_touch);
 }
 
 std::map<stream_id_type, std::vector<unsigned int>> ZoneDirectory::Written_block_offsets_by_stream(uint64_t zone_id) const
@@ -370,9 +390,11 @@ uint64_t ZoneDirectory::Find_hottest_used_zone_on_ssd(unsigned int ssd_id, const
 		if (zone.Empty || zone.Migrating || Is_reserved(zone_id, reserved) || Owner_ssd(zone_id) != ssd_id) {
 			continue;
 		}
-		if (selected == INVALID_ZONE_ID || zone.Number_of_writes > best) {
+		// Keep Number_of_writes for paper-style request-count reporting, but pick
+		// the migration source by the actual logical byte volume written to it.
+		if (selected == INVALID_ZONE_ID || zone.Written_sectors > best) {
 			selected = zone_id;
-			best = zone.Number_of_writes;
+			best = zone.Written_sectors;
 		}
 	}
 	return selected;
@@ -410,6 +432,7 @@ void ZoneDirectory::Reset_logical_zone(uint64_t logical_zone)
 	Validate_zone_id(logical_zone);
 	ZoneEntry& zone = zones[static_cast<size_t>(logical_zone)];
 	zone.Number_of_writes = 0;
+	zone.Written_sectors = 0;
 	zone.Empty = true;
 	zone.Migrating = false;
 	zone.Written_blocks_by_stream.clear();

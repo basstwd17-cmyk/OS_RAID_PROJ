@@ -70,6 +70,7 @@ void MigrationExecutor::Start(const std::vector<MigrationTask>& tasks, ZoneDirec
 			const stream_id_type stream_id = tasks[i].Copies[copy_index].Stream_id;
 			ensure_block_bitmap(item.Buffer.Grabbed_blocks, stream_id, static_cast<size_t>(block_count));
 			ensure_block_bitmap(item.Buffer.Dirty_blocks, stream_id, static_cast<size_t>(block_count));
+			ensure_block_bitmap(item.Discarded_source_blocks, stream_id, static_cast<size_t>(block_count));
 			item.Restore_block_states[stream_id].assign(static_cast<size_t>(block_count), RestoreBlockState::NOT_SCHEDULED);
 			item.Restore_after_active_write[stream_id].assign(static_cast<size_t>(block_count), false);
 		}
@@ -78,6 +79,40 @@ void MigrationExecutor::Start(const std::vector<MigrationTask>& tasks, ZoneDirec
 		directory.Mark_migrating(tasks[i].Op.Hot_zone, true);
 		directory.Mark_migrating(tasks[i].Op.Cold_zone, true);
 	}
+}
+
+bool MigrationExecutor::Has_active_copy() const
+{
+	for (size_t i = 0; i < inflight.size(); i++) {
+		if (!inflight[i].Active_request_id.empty()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool MigrationExecutor::Intersects_inflight_zones(const std::vector<uint64_t>& request_zone_ids) const
+{
+	for (size_t i = 0; i < inflight.size(); i++) {
+		if (Is_intercept_target(inflight[i], request_zone_ids)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+MigrationExecutor::AbortSummary MigrationExecutor::Abort_all(ZoneDirectory& directory)
+{
+	AbortSummary summary;
+	for (size_t i = 0; i < inflight.size(); i++) {
+		InflightTask& task = inflight[i];
+		summary.Task_count++;
+		summary.Deferred_request_count += task.Deferred_requests.size();
+		directory.Mark_migrating(task.Task.Op.Hot_zone, false);
+		directory.Mark_migrating(task.Task.Op.Cold_zone, false);
+	}
+	inflight.clear();
+	return summary;
 }
 
 bool MigrationExecutor::Is_intercept_target(const InflightTask& task, const std::vector<uint64_t>& request_zone_ids) const
@@ -165,7 +200,8 @@ void MigrationExecutor::Mark_dirty_blocks(InflightTask& task,
 MigrationExecutor::InterceptResult MigrationExecutor::Maybe_intercept(SSD_Components::User_Request* request,
 	const std::vector<uint64_t>& request_zone_ids,
 	ZoneDirectory& directory,
-	const BufferedWriteObserveFunction& observe_buffered_write)
+	const BufferedWriteObserveFunction& observe_buffered_write,
+	sim_time_type enqueue_time)
 {
 	if (request == nullptr) {
 		return InterceptResult::SUBMITTED;
@@ -183,6 +219,7 @@ MigrationExecutor::InterceptResult MigrationExecutor::Maybe_intercept(SSD_Compon
 		DeferredRequest deferred;
 		deferred.Request = request;
 		deferred.Complete_without_dispatch = false;
+		deferred.Enqueue_time = enqueue_time;
 		if (request->Type == SSD_Components::UserRequestType::WRITE && Hits_zone(task.Task.Op.Hot_zone, request_zone_ids)) {
 			Mark_dirty_blocks(task, request, directory);
 			deferred.Complete_without_dispatch = Hits_only_zone(task.Task.Op.Hot_zone, request_zone_ids);
@@ -224,6 +261,7 @@ bool MigrationExecutor::Notify_request_completed(io_request_id_type request_id, 
 					Append_restore_copy(task, task.Active_stream_id, task.Active_block_offset, directory);
 				} else {
 					restore_states[task.Active_block_offset] = RestoreBlockState::COMPLETED;
+					task.Pending_source_discards.push_back(std::make_pair(task.Active_stream_id, task.Active_block_offset));
 				}
 			}
 			task.Next_restore++;
@@ -344,6 +382,42 @@ void MigrationExecutor::Drain_task(InflightTask& task, ZoneDirectory& directory)
 	}
 }
 
+void MigrationExecutor::Discard_source_block(InflightTask& task, stream_id_type stream_id, unsigned int block_offset,
+	const DiscardFunction& discard_source, uint64_t task_index)
+{
+	if (!discard_source) {
+		return;
+	}
+	std::vector<bool>& discarded = task.Discarded_source_blocks[stream_id];
+	if (block_offset >= discarded.size()) {
+		discarded.resize(static_cast<size_t>(block_offset) + 1, false);
+	}
+	if (discarded[block_offset]) {
+		return;
+	}
+	for (size_t i = 0; i < task.Task.Copies.size(); i++) {
+		const StripeCopyPlan& copy = task.Task.Copies[i];
+		if (copy.Stream_id != stream_id || copy.Stripe_offset != block_offset || copy.Lba_count == 0) {
+			continue;
+		}
+		if (discard_source(copy, task_index)) {
+			discarded[block_offset] = true;
+			discarded_source_blocks++;
+			discarded_source_sectors += copy.Lba_count;
+		}
+		return;
+	}
+}
+
+void MigrationExecutor::Drain_pending_source_discards(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index)
+{
+	while (!task.Pending_source_discards.empty()) {
+		const std::pair<stream_id_type, unsigned int> item = task.Pending_source_discards.front();
+		task.Pending_source_discards.pop_front();
+		Discard_source_block(task, item.first, item.second, discard_source, task_index);
+	}
+}
+
 void MigrationExecutor::Discard_source_copies(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index)
 {
 	if (!discard_source) {
@@ -351,23 +425,17 @@ void MigrationExecutor::Discard_source_copies(InflightTask& task, const DiscardF
 	}
 	for (size_t i = 0; i < task.Task.Copies.size(); i++) {
 		const StripeCopyPlan& copy = task.Task.Copies[i];
-		if (copy.Lba_count == 0) {
-			continue;
-		}
-		if (discard_source(copy, task_index)) {
-			discarded_source_blocks++;
-			discarded_source_sectors += copy.Lba_count;
-		}
+		Discard_source_block(task, copy.Stream_id, copy.Stripe_offset, discard_source, task_index);
 	}
 }
 
 void MigrationExecutor::Poll(ZoneDirectory& directory,
 	const SubmitCopyFunction& submit_copy,
-	const DiscardFunction& discard_source,
-	const CompletionFunction& complete_migration)
+	const DiscardFunction& discard_source)
 {
 	for (size_t i = 0; i < inflight.size(); i++) {
 		InflightTask& task = inflight[i];
+		Drain_pending_source_discards(task, discard_source, i);
 		bool advance_without_io = true;
 		while (advance_without_io) {
 			advance_without_io = false;
@@ -419,12 +487,8 @@ void MigrationExecutor::Poll(ZoneDirectory& directory,
 					break;
 				case TaskState::DRAINING_QUEUE:
 				{
-					const uint64_t moved_write_count = task.Task.Moved_write_count;
 					Discard_source_copies(task, discard_source, i);
 					Drain_task(task, directory);
-					if (complete_migration) {
-						complete_migration(task.Task, moved_write_count);
-					}
 					task.State = TaskState::DONE;
 					break;
 				}

@@ -1870,22 +1870,61 @@ namespace SSD_Components
 		return domains[stream_id]->Locked_MVPNs.find(mvpn) != domains[stream_id]->Locked_MVPNs.end();
 	}
 
-	inline void Address_Mapping_Unit_Page_Level::Set_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa)
+	Barrier_Statistics Address_Mapping_Unit_Page_Level::Get_barrier_statistics() const
 	{
-		auto itr = domains[stream_id]->Locked_LPAs.find(lpa);
-		if (itr != domains[stream_id]->Locked_LPAs.end()) {
-			PRINT_ERROR("Illegal operation: Locking an LPA that has already been locked!");
+		Barrier_Statistics statistics = barrier_statistics;
+		for (unsigned int stream_id = 0; stream_id < no_of_input_streams; stream_id++) {
+			statistics.Current_LPA_barriers += domains[stream_id]->Locked_LPAs.size();
+			statistics.Current_MVPN_barriers += domains[stream_id]->Locked_MVPNs.size();
+			for (std::map<LPA_type, std::vector<Barrier_Owner>>::const_iterator it = domains[stream_id]->Locked_LPAs.begin();
+				it != domains[stream_id]->Locked_LPAs.end(); ++it) {
+				statistics.Current_LPA_lock_owners += it->second.size();
+			}
+			for (std::map<MVPN_type, std::vector<Barrier_Owner>>::const_iterator it = domains[stream_id]->Locked_MVPNs.begin();
+				it != domains[stream_id]->Locked_MVPNs.end(); ++it) {
+				statistics.Current_MVPN_lock_owners += it->second.size();
+			}
 		}
-		domains[stream_id]->Locked_LPAs.insert(lpa);
+		return statistics;
 	}
 
-	inline void Address_Mapping_Unit_Page_Level::Set_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mvpn)
+	Free_Block_Pool_Statistics Address_Mapping_Unit_Page_Level::Get_free_block_pool_statistics() const
 	{
-		auto itr = domains[stream_id]->Locked_MVPNs.find(mvpn);
-		if (itr != domains[stream_id]->Locked_MVPNs.end()) {
-			PRINT_ERROR("Illegal operation: Locking an MVPN that has already been locked!");
+		return free_block_pool_statistics;
+	}
+
+	inline void Address_Mapping_Unit_Page_Level::Set_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa,
+	const NVM::FlashMemory::Physical_Page_Address& owner_block_address)
+	{
+		std::vector<Barrier_Owner>& owners = domains[stream_id]->Locked_LPAs[lpa];
+		if (!owners.empty()) {
+			barrier_statistics.Overlapping_LPA_locks++;
+			for (size_t i = 0; i < owners.size(); i++) {
+				if (owners[i].Matches(owner_block_address)) {
+					barrier_statistics.Duplicate_owner_locks++;
+					break;
+				}
+			}
 		}
-		domains[stream_id]->Locked_MVPNs.insert(mvpn);
+		owners.push_back(Barrier_Owner(owner_block_address, Simulator->Time()));
+		barrier_statistics.LPA_lock_acquisitions++;
+	}
+
+	inline void Address_Mapping_Unit_Page_Level::Set_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mvpn,
+	const NVM::FlashMemory::Physical_Page_Address& owner_block_address)
+	{
+		std::vector<Barrier_Owner>& owners = domains[stream_id]->Locked_MVPNs[mvpn];
+		if (!owners.empty()) {
+			barrier_statistics.Overlapping_MVPN_locks++;
+			for (size_t i = 0; i < owners.size(); i++) {
+				if (owners[i].Matches(owner_block_address)) {
+					barrier_statistics.Duplicate_owner_locks++;
+					break;
+				}
+			}
+		}
+		owners.push_back(Barrier_Owner(owner_block_address, Simulator->Time()));
+		barrier_statistics.MVPN_lock_acquisitions++;
 	}
 
 	inline void Address_Mapping_Unit_Page_Level::Set_barrier_for_accessing_physical_block(const NVM::FlashMemory::Physical_Page_Address& block_address)
@@ -1901,7 +1940,7 @@ namespace SSD_Components
 					if (domains[block->Stream_id]->GlobalTranslationDirectory[mpvn].MPPN != Convert_address_to_ppa(addr)) {
 						PRINT_ERROR("Inconsistency in the global translation directory when locking an MPVN!")
 					}
-                    Set_barrier_for_accessing_mvpn(block->Stream_id, mpvn);
+					Set_barrier_for_accessing_mvpn(block->Stream_id, mpvn, block_address);
 				} else {
 					LPA_type lpa = flash_controller->Get_metadata(addr.ChannelID, addr.ChipID, addr.DieID, addr.PlaneID, addr.BlockID, addr.PageID);
 					LPA_type ppa = domains[block->Stream_id]->GlobalMappingTable[lpa].PPA;
@@ -1911,17 +1950,43 @@ namespace SSD_Components
 					if (ppa != Convert_address_to_ppa(addr)) {
 						PRINT_ERROR("Inconsistency in the global mapping table when locking an LPA!")
 					}
-					Set_barrier_for_accessing_lpa(block->Stream_id, lpa);
+					Set_barrier_for_accessing_lpa(block->Stream_id, lpa, block_address);
 				}
 			}
 		}
 	}
 
-	inline void Address_Mapping_Unit_Page_Level::Remove_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa)
+	inline void Address_Mapping_Unit_Page_Level::Remove_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa,
+	const NVM::FlashMemory::Physical_Page_Address& owner_block_address)
 	{
 		auto itr = domains[stream_id]->Locked_LPAs.find(lpa);
 		if (itr == domains[stream_id]->Locked_LPAs.end()) {
-			PRINT_ERROR("Illegal operation: Unlocking an LPA that has not been locked!");
+			barrier_statistics.Unmatched_LPA_unlocks++;
+			PRINT_ERROR("Illegal operation: Unlocking an LPA that has not been locked! stream_id=" << stream_id
+				<< " lpa=" << lpa
+				<< " locked_lpa_count=" << domains[stream_id]->Locked_LPAs.size()
+				<< " waiting_reads=" << domains[stream_id]->Read_transactions_behind_LPA_barrier.count(lpa)
+				<< " waiting_writes=" << domains[stream_id]->Write_transactions_behind_LPA_barrier.count(lpa)
+				<< " pending_discard=" << (domains[stream_id]->Pending_discard_masks.find(lpa) != domains[stream_id]->Pending_discard_masks.end()))
+			return;
+		}
+
+		std::vector<Barrier_Owner>& owners = itr->second;
+		std::vector<Barrier_Owner>::iterator owner = std::find_if(owners.begin(), owners.end(),
+			[&owner_block_address](const Barrier_Owner& candidate) { return candidate.Matches(owner_block_address); });
+		if (owner == owners.end()) {
+			barrier_statistics.Owner_mismatch_unlocks++;
+			PRINT_ERROR("Illegal operation: Unlocking an LPA with a different GC/WL owner! stream_id=" << stream_id
+				<< " lpa=" << lpa << " owner_block=" << owner_block_address.BlockID)
+			return;
+		}
+
+		const sim_time_type lifetime = Simulator->Time() >= owner->Lock_time ? Simulator->Time() - owner->Lock_time : 0;
+		barrier_statistics.Max_barrier_lifetime = std::max(barrier_statistics.Max_barrier_lifetime, lifetime);
+		owners.erase(owner);
+		barrier_statistics.LPA_lock_releases++;
+		if (!owners.empty()) {
+			return;
 		}
 		domains[stream_id]->Locked_LPAs.erase(itr);
 
@@ -1942,6 +2007,18 @@ namespace SSD_Components
 			domains[stream_id]->Write_transactions_behind_LPA_barrier.erase(write_tr);
 			write_tr = domains[stream_id]->Write_transactions_behind_LPA_barrier.find(lpa);
 		}
+		for (std::list<NVM_Transaction*>::const_iterator transaction = transactions_to_redispatch.begin();
+			transaction != transactions_to_redispatch.end(); ++transaction) {
+			NVM_Transaction_Flash* flash_transaction = static_cast<NVM_Transaction_Flash*>(*transaction);
+			auto wait_start = domains[stream_id]->User_transaction_barrier_wait_start_times.find(flash_transaction);
+			if (wait_start != domains[stream_id]->User_transaction_barrier_wait_start_times.end()) {
+				const sim_time_type wait_time = Simulator->Time() >= wait_start->second ? Simulator->Time() - wait_start->second : 0;
+				barrier_statistics.Total_user_transaction_wait_time += wait_time;
+				barrier_statistics.Max_user_transaction_wait_time = std::max(barrier_statistics.Max_user_transaction_wait_time, wait_time);
+				barrier_statistics.Released_user_transactions++;
+				domains[stream_id]->User_transaction_barrier_wait_start_times.erase(wait_start);
+			}
+		}
 
 		auto pending_discard = domains[stream_id]->Pending_discard_masks.find(lpa);
 		if (pending_discard != domains[stream_id]->Pending_discard_masks.end()) {
@@ -1955,11 +2032,32 @@ namespace SSD_Components
 		}
 	}
 
-	inline void Address_Mapping_Unit_Page_Level::Remove_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mvpn)
+	inline void Address_Mapping_Unit_Page_Level::Remove_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mvpn,
+	const NVM::FlashMemory::Physical_Page_Address& owner_block_address)
 	{
 		auto itr = domains[stream_id]->Locked_MVPNs.find(mvpn);
 		if (itr == domains[stream_id]->Locked_MVPNs.end()) {
+			barrier_statistics.Unmatched_MVPN_unlocks++;
 			PRINT_ERROR("Illegal operation: Unlocking an MVPN that has not been locked!");
+			return;
+		}
+
+		std::vector<Barrier_Owner>& owners = itr->second;
+		std::vector<Barrier_Owner>::iterator owner = std::find_if(owners.begin(), owners.end(),
+			[&owner_block_address](const Barrier_Owner& candidate) { return candidate.Matches(owner_block_address); });
+		if (owner == owners.end()) {
+			barrier_statistics.Owner_mismatch_unlocks++;
+			PRINT_ERROR("Illegal operation: Unlocking an MVPN with a different GC/WL owner! stream_id=" << stream_id
+				<< " mvpn=" << mvpn << " owner_block=" << owner_block_address.BlockID)
+			return;
+		}
+
+		const sim_time_type lifetime = Simulator->Time() >= owner->Lock_time ? Simulator->Time() - owner->Lock_time : 0;
+		barrier_statistics.Max_barrier_lifetime = std::max(barrier_statistics.Max_barrier_lifetime, lifetime);
+		owners.erase(owner);
+		barrier_statistics.MVPN_lock_releases++;
+		if (!owners.empty()) {
+			return;
 		}
 		domains[stream_id]->Locked_MVPNs.erase(itr);
 
@@ -2024,6 +2122,7 @@ namespace SSD_Components
 	inline void Address_Mapping_Unit_Page_Level::manage_user_transaction_facing_barrier(NVM_Transaction_Flash* transaction)
 	{
 		std::pair<LPA_type, NVM_Transaction_Flash*> entry(transaction->LPA, transaction);
+		domains[transaction->Stream_id]->User_transaction_barrier_wait_start_times.emplace(transaction, Simulator->Time());
 		if (transaction->Type == Transaction_Type::READ) {
 			domains[transaction->Stream_id]->Read_transactions_behind_LPA_barrier.insert(entry);
 		} else {
@@ -2044,6 +2143,11 @@ namespace SSD_Components
 	{
 		//Currently, the only unsuccessfull translation would be for program translations that are accessing a plane that is running out of free pages
 		Write_transactions_for_overfull_planes[transaction->Address.ChannelID][transaction->Address.ChipID][transaction->Address.DieID][transaction->Address.PlaneID].insert((NVM_Transaction_Flash_WR*)transaction);
+		free_block_pool_statistics.Deferred_program_transactions++;
+		free_block_pool_statistics.Current_deferred_program_transactions++;
+		if (free_block_pool_statistics.Current_deferred_program_transactions > free_block_pool_statistics.Maximum_deferred_program_transactions) {
+			free_block_pool_statistics.Maximum_deferred_program_transactions = free_block_pool_statistics.Current_deferred_program_transactions;
+		}
 	}
 
 	void Address_Mapping_Unit_Page_Level::Start_servicing_writes_for_overfull_plane(const NVM::FlashMemory::Physical_Page_Address plane_address)
@@ -2055,6 +2159,8 @@ namespace SSD_Components
 		while (program != waiting_write_list.end()) {
 			if (translate_lpa_to_ppa((*program)->Stream_id, *program)) {
 				ftl->TSU->Submit_transaction(*program);
+				free_block_pool_statistics.Resumed_program_transactions++;
+				free_block_pool_statistics.Current_deferred_program_transactions--;
 				if ((*program)->RelatedRead != NULL) {
 					ftl->TSU->Submit_transaction((*program)->RelatedRead);
 				}

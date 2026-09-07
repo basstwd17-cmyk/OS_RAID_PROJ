@@ -182,10 +182,12 @@ SSD_Device::SSD_Device(Device_Parameter_Set *parameters, std::vector<IO_Flow_Par
 
 		//Step 6: create Flash_Block_Manager
 		SSD_Components::Flash_Block_Manager_Base *fbm;
-		fbm = new SSD_Components::Flash_Block_Manager(NULL, parameters->Flash_Parameters.Block_PE_Cycles_Limit,
-													  (unsigned int)io_flows->size(), parameters->Flash_Channel_Count, parameters->Chip_No_Per_Channel,
-													  parameters->Flash_Parameters.Die_No_Per_Chip, parameters->Flash_Parameters.Plane_No_Per_Die,
-													  parameters->Flash_Parameters.Block_No_Per_Plane, parameters->Flash_Parameters.Page_No_Per_Block);
+		fbm = new SSD_Components::Flash_Block_Manager(device->ID(), NULL, parameters->Flash_Parameters.Block_PE_Cycles_Limit,
+												  (unsigned int)io_flows->size(), parameters->Flash_Channel_Count, parameters->Chip_No_Per_Channel,
+												  parameters->Flash_Parameters.Die_No_Per_Chip, parameters->Flash_Parameters.Plane_No_Per_Die,
+												  parameters->Flash_Parameters.Block_No_Per_Plane, parameters->Flash_Parameters.Page_No_Per_Block,
+												  parameters->Overprovisioning_Ratio, parameters->Bad_Block_Retirement_Enabled,
+												  parameters->End_of_Life_Threshold);
 		ftl->BlockManager = fbm;
 
 		//Step 7: create Address_Mapping_Unit

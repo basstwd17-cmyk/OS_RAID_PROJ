@@ -1,6 +1,7 @@
 #include <stdexcept>
 #include "Engine.h"
 #include "../utils/Logical_Address_Partitioning_Unit.h"
+#include "../ssd/Device_Lifecycle_Monitor.h"
 
 namespace MQSimEngine
 {
@@ -21,6 +22,7 @@ namespace MQSimEngine
 		stop = false;
 		started = false;
 		Utils::Logical_Address_Partitioning_Unit::Reset();
+		SSD_Components::Device_Lifecycle_Monitor::Reset();
 	}
 
 

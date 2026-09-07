@@ -94,6 +94,10 @@ namespace SSD_Components
 							}
 						}
 						block->Erase_transaction = gc_wl_erase_tr;
+						// A GC deferred by an outstanding user read must enqueue its erase
+						// just like the immediate path in Check_gc_required. Otherwise the
+						// block stays in Ongoing_erase_operations after its copies drain.
+						tsu->Submit_transaction(gc_wl_erase_tr);
 						tsu->Schedule();
 					}
 				}
@@ -144,10 +148,12 @@ namespace SSD_Components
 					block_manager->Program_transaction_serviced(transaction->Address);
 				}
 				if (pbke->Blocks[((NVM_Transaction_Flash_WR*)transaction)->RelatedErase->Address.BlockID].Holds_mapping_data) {
-					address_mapping_unit->Remove_barrier_for_accessing_mvpn(transaction->Stream_id, (MVPN_type)transaction->LPA);
+					address_mapping_unit->Remove_barrier_for_accessing_mvpn(transaction->Stream_id, (MVPN_type)transaction->LPA,
+						((NVM_Transaction_Flash_WR*)transaction)->RelatedErase->Address);
 					DEBUG(Simulator->Time() << ": MVPN=" << (MVPN_type)transaction->LPA << " unlocked!!");
 				} else {
-					address_mapping_unit->Remove_barrier_for_accessing_lpa(transaction->Stream_id, transaction->LPA);
+					address_mapping_unit->Remove_barrier_for_accessing_lpa(transaction->Stream_id, transaction->LPA,
+						((NVM_Transaction_Flash_WR*)transaction)->RelatedErase->Address);
 					DEBUG(Simulator->Time() << ": LPA=" << (MVPN_type)transaction->LPA << " unlocked!!");
 				}
 				pbke->Blocks[((NVM_Transaction_Flash_WR*)transaction)->RelatedErase->Address.BlockID].Erase_transaction->Page_movement_activities.remove((NVM_Transaction_Flash_WR*)transaction);
@@ -223,6 +229,11 @@ namespace SSD_Components
 
 	bool GC_and_WL_Unit_Base::is_safe_gc_wl_candidate(const PlaneBookKeepingType* plane_record, const flash_block_ID_type gc_wl_candidate_block_id)
 	{
+		if (plane_record == NULL || gc_wl_candidate_block_id >= block_no_per_plane
+			|| plane_record->Blocks[gc_wl_candidate_block_id].Is_bad) {
+			return false;
+		}
+
 		//The block shouldn't be a current write frontier
 		for (unsigned int stream_id = 0; stream_id < address_mapping_unit->Get_no_of_input_streams(); stream_id++) {
 			if ((&plane_record->Blocks[gc_wl_candidate_block_id]) == plane_record->Data_wf[stream_id]

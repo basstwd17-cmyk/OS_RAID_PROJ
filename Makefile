@@ -1,75 +1,47 @@
-CXX ?= g++
-CPPFLAGS ?=
-CXXFLAGS ?= -std=c++11 -O3 -g
-LDFLAGS ?=
-LDLIBS ?=
+CC        := g++
+LD        := g++
+CC_FLAGS := -std=c++11 -O3 -g
 
-MODULES := exec host nvm_chip nvm_chip/flash_memory policy sim ssd utils
+MODULES   := exec host nvm_chip nvm_chip/flash_memory policy sim ssd utils
+SRC_DIR   := $(addprefix src/,$(MODULES)) src
+BUILD_DIR := $(addprefix build/,$(MODULES)) build
 
-SRC_DIRS := $(addprefix src/,$(MODULES)) src
-SOURCES := $(sort $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.cpp)))
-OBJECTS := $(patsubst src/%.cpp,build/%.o,$(SOURCES))
-DEPS := $(OBJECTS:.o=.d)
-INCLUDES := $(addprefix -I,$(SRC_DIRS))
+SRC       := $(foreach sdir,$(SRC_DIR),$(wildcard $(sdir)/*.cpp))
+SRC       := src/main.cpp $(SRC)
+OBJ       := $(patsubst src/%.cpp,build/%.o,$(SRC))
+INCLUDES  := $(addprefix -I,$(SRC_DIR))
+
+vpath %.cpp $(SRC_DIR)
+
+define make-goal
+$1/%.o: %.cpp
+	$(CC) $(CC_FLAGS) $(INCLUDES) -c $$< -o $$@
+endef
+
+.PHONY: all checkdirs clean
 
 ifeq ($(OS),Windows_NT)
-SHELL := cmd.exe
-.SHELLFLAGS := /C
-EXEEXT := .exe
-RUNNER = $(TARGET)
-MAKE_DIR = if not exist "$(subst /,\,$(@D))" mkdir "$(subst /,\,$(@D))"
-REMOVE_BUILD = if exist build rmdir /S /Q build
-REMOVE_BINARY = if exist $(TARGET) del /Q $(TARGET)
+MKDIR_CMD = if not exist "$@" mkdir "$@"
+RM_BUILD_CMD = if exist build rmdir /S /Q build
+RM_BIN_CMD = if exist MQSim.exe del /Q MQSim.exe & if exist MQSim del /Q MQSim
 else
-EXEEXT :=
-RUNNER = ./$(TARGET)
-MAKE_DIR = mkdir -p "$(@D)"
-REMOVE_BUILD = rm -rf build
-REMOVE_BINARY = rm -f $(TARGET)
+MKDIR_CMD = mkdir -p "$@"
+RM_BUILD_CMD = rm -rf $(BUILD_DIR)
+RM_BIN_CMD = rm -f MQSim
 endif
 
-TARGET := MQSim$(EXEEXT)
-ZONE_TEST := build/tests/zone_directory_mapping_test$(EXEEXT)
-WEAR_TEST := build/tests/wear_leveling_policy_test$(EXEEXT)
-MIGRATION_TEST := build/tests/migration_executor_test$(EXEEXT)
-TEST_TARGETS := $(ZONE_TEST) $(WEAR_TEST) $(MIGRATION_TEST)
-TEST_OBJECTS := $(patsubst tests/%.cpp,build/tests/%.o,$(wildcard tests/*.cpp))
-TEST_DEPS := $(TEST_OBJECTS:.o=.d)
+all: checkdirs MQSim
 
-.PHONY: all clean run test
+MQSim: $(OBJ)
+	$(LD) $^ -o $@
 
-all: $(TARGET)
+checkdirs: $(BUILD_DIR)
 
-$(TARGET): $(OBJECTS)
-	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
-
-build/%.o: src/%.cpp
-	@$(MAKE_DIR)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
-
-build/tests/%.o: tests/%.cpp
-	@$(MAKE_DIR)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
-
-$(ZONE_TEST): build/tests/zone_directory_mapping_test.o build/policy/zone_directory.o
-	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
-
-$(WEAR_TEST): build/tests/wear_leveling_policy_test.o build/policy/wear_leveling_policy.o build/policy/zone_directory.o
-	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
-
-$(MIGRATION_TEST): build/tests/migration_executor_test.o build/policy/migration_executor.o build/policy/zone_directory.o
-	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
-
-test: $(TEST_TARGETS)
-	$(ZONE_TEST)
-	$(WEAR_TEST)
-	$(MIGRATION_TEST)
-
-run: $(TARGET)
-	$(RUNNER) -i ssdconfig.xml -w workload.xml
+$(BUILD_DIR):
+	@$(MKDIR_CMD)
 
 clean:
-	@$(REMOVE_BUILD)
-	@$(REMOVE_BINARY)
+	@$(RM_BUILD_CMD)
+	@$(RM_BIN_CMD)
 
--include $(DEPS) $(TEST_DEPS)
+$(foreach bdir,$(BUILD_DIR),$(eval $(call make-goal,$(bdir))))

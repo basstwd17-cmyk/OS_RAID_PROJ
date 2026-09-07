@@ -34,6 +34,10 @@ namespace SSD_Components
 		PPA_type Convert_address_to_ppa(const NVM::FlashMemory::Physical_Page_Address& pageAddress);
 
 		void Set_barrier_for_accessing_physical_block(const NVM::FlashMemory::Physical_Page_Address& block_address);
+		void Set_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa, const NVM::FlashMemory::Physical_Page_Address& owner_block_address);
+		void Set_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mpvn, const NVM::FlashMemory::Physical_Page_Address& owner_block_address);
+		void Remove_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa, const NVM::FlashMemory::Physical_Page_Address& owner_block_address);
+		void Remove_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mpvn, const NVM::FlashMemory::Physical_Page_Address& owner_block_address);
 		void Set_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa);
 		void Set_barrier_for_accessing_mvpn(stream_id_type stream_id, MVPN_type mpvn);
 		void Remove_barrier_for_accessing_lpa(stream_id_type stream_id, LPA_type lpa);

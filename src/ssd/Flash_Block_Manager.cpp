@@ -5,11 +5,13 @@
 
 namespace SSD_Components
 {
-	Flash_Block_Manager::Flash_Block_Manager(GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
+	Flash_Block_Manager::Flash_Block_Manager(const std::string& device_id, GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
 		unsigned int channel_count, unsigned int chip_no_per_channel, unsigned int die_no_per_chip, unsigned int plane_no_per_die,
-		unsigned int block_no_per_plane, unsigned int page_no_per_block)
-		: Flash_Block_Manager_Base(gc_and_wl_unit, max_allowed_block_erase_count, total_concurrent_streams_no, channel_count, chip_no_per_channel, die_no_per_chip,
-			plane_no_per_die, block_no_per_plane, page_no_per_block)
+		unsigned int block_no_per_plane, unsigned int page_no_per_block, double overprovisioning_ratio,
+		bool bad_block_retirement_enabled, double end_of_life_threshold)
+		: Flash_Block_Manager_Base(device_id, gc_and_wl_unit, max_allowed_block_erase_count, total_concurrent_streams_no, channel_count, chip_no_per_channel, die_no_per_chip,
+			plane_no_per_die, block_no_per_plane, page_no_per_block, overprovisioning_ratio,
+			bad_block_retirement_enabled, end_of_life_threshold)
 	{
 	}
 
@@ -136,10 +138,21 @@ namespace SSD_Components
 	{
 		PlaneBookKeepingType *plane_record = &plane_manager[block_address.ChannelID][block_address.ChipID][block_address.DieID][block_address.PlaneID];
 		Block_Pool_Slot_Type* block = &(plane_record->Blocks[block_address.BlockID]);
-		plane_record->Free_pages_count += block->Invalid_page_count;
-		plane_record->Invalid_pages_count -= block->Invalid_page_count;
+		const unsigned int reclaimed_pages = block->Invalid_page_count;
+		const unsigned int unwritten_pages = pages_no_per_block - block->Current_page_write_index;
+		plane_record->Free_pages_count += reclaimed_pages;
+		plane_record->Invalid_pages_count -= reclaimed_pages;
 
 		block->Erase();
+		if (Retire_block_if_worn_out(block)) {
+			const unsigned int retired_free_pages = reclaimed_pages + unwritten_pages;
+			if (plane_record->Free_pages_count < retired_free_pages) {
+				PRINT_ERROR("Free-page accounting underflow while retiring a worn-out block")
+			}
+			plane_record->Total_pages_count -= pages_no_per_block;
+			plane_record->Free_pages_count -= retired_free_pages;
+			return;
+		}
 		plane_record->Add_to_free_block_pool(block, gc_and_wl_unit->Use_dynamic_wearleveling());
 		plane_record->Check_bookkeeping_correctness(block_address);
 	}

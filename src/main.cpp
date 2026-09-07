@@ -290,6 +290,17 @@ int main(int argc, char* argv[])
 		for (auto io_flow_def = (*io_scen)->begin(); io_flow_def != (*io_scen)->end(); io_flow_def++) {
 			exec_params->Host_Configuration.IO_Flow_Definitions.push_back(*io_flow_def);
 		}
+		bool eol_replay_requested = false;
+		for (auto io_flow_def : exec_params->Host_Configuration.IO_Flow_Definitions) {
+			if (io_flow_def->Type == Flow_Type::TRACE
+				&& static_cast<IO_Flow_Parameter_Set_Trace_Based*>(io_flow_def)->Relay_Count == 0) {
+				eol_replay_requested = true;
+				break;
+			}
+		}
+		if (eol_replay_requested && !exec_params->SSD_Device_Configuration.Bad_Block_Retirement_Enabled) {
+			PRINT_ERROR("Relay_Count=0 requires Bad_Block_Retirement_Enabled=true; otherwise EOL cannot be reached")
+		}
 		
 		// ?????IO ????????(exec_params -> Host_Configuration.IO_Flow_Definitions)
 		exec_params->Host_Configuration.Input_file_path = workload_defs_file_path.substr(0, workload_defs_file_path.find_last_of('.')); //Create Host_System based on the specified parameters
