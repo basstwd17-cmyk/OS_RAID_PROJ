@@ -43,8 +43,14 @@ namespace SSD_Components
 	void GC_and_WL_Unit_Page_Level::Check_gc_required(const unsigned int free_block_pool_size, const NVM::FlashMemory::Physical_Page_Address& plane_address)
 	{
 		if (free_block_pool_size < block_pool_gc_threshold) {
-			flash_block_ID_type gc_candidate_block_id = block_manager->Get_coldest_block_id(plane_address);
+			flash_block_ID_type gc_candidate_block_id = block_no_per_plane;
 			PlaneBookKeepingType* pbke = block_manager->Get_plane_bookkeeping_entry(plane_address);
+			auto eligible = [&](flash_block_ID_type id, bool full, unsigned int invalid_min) {
+				return id < block_no_per_plane && is_safe_gc_wl_candidate(pbke, id)
+					&& pbke->Ongoing_erase_operations.count(id) == 0
+					&& pbke->Blocks[id].Invalid_page_count >= std::max(1U, invalid_min)
+					&& (!full || pbke->Blocks[id].Current_page_write_index == pages_no_per_block);
+			};
 
 			if (pbke->Ongoing_erase_operations.size() >= max_ongoing_gc_reqs_per_plane) {
 				return;
@@ -55,10 +61,7 @@ namespace SSD_Components
 				{
 					gc_candidate_block_id = block_no_per_plane;
 					for (flash_block_ID_type block_id = 0; block_id < block_no_per_plane; block_id++) {
-						if (pbke->Ongoing_erase_operations.find(block_id) != pbke->Ongoing_erase_operations.end()
-							|| pbke->Blocks[block_id].Current_page_write_index != pages_no_per_block
-							|| pbke->Blocks[block_id].Invalid_page_count == 0
-							|| !is_safe_gc_wl_candidate(pbke, block_id)) {
+						if (!eligible(block_id, true, 1)) {
 							continue;
 						}
 						if (gc_candidate_block_id == block_no_per_plane
@@ -77,8 +80,7 @@ namespace SSD_Components
 					unsigned int repeat = 0;
 					while (random_set.size() < rga_set_size && repeat++ < block_no_per_plane * 2) {
 						flash_block_ID_type block_id = random_generator.Uniform_uint(0, block_no_per_plane - 1);
-						if (pbke->Ongoing_erase_operations.find(block_id) == pbke->Ongoing_erase_operations.end()
-							&& is_safe_gc_wl_candidate(pbke, block_id)) {
+						if (eligible(block_id, true, 1)) {
 							random_set.insert(block_id);
 							}
 					}
@@ -86,8 +88,7 @@ namespace SSD_Components
 					// Fall back to a bounded scan rather than spinning or reporting a false shortage.
 					for (flash_block_ID_type block_id = 0;
 						random_set.size() < rga_set_size && block_id < block_no_per_plane; block_id++) {
-						if (pbke->Ongoing_erase_operations.find(block_id) == pbke->Ongoing_erase_operations.end()
-							&& is_safe_gc_wl_candidate(pbke, block_id)) {
+						if (eligible(block_id, true, 1)) {
 							random_set.insert(block_id);
 						}
 					}
@@ -140,15 +141,34 @@ namespace SSD_Components
 					}
 					break;
 				}
-				case SSD_Components::GC_Block_Selection_Policy_Type::FIFO:
-					gc_candidate_block_id = pbke->Block_usage_history.front();
-					pbke->Block_usage_history.pop();
+				case SSD_Components::GC_Block_Selection_Policy_Type::FIFO: {
+					size_t remaining = pbke->Block_usage_history.size();
+					while (remaining-- && !pbke->Block_usage_history.empty()) {
+						auto id = pbke->Block_usage_history.front();
+						pbke->Block_usage_history.pop();
+						if (eligible(id, true, 1)) { gc_candidate_block_id = id; break; }
+						if (!pbke->Blocks[id].Is_bad) pbke->Block_usage_history.push(id);
+					}
 					break;
+				}
 				default:
 					break;
 			}
 
-			//This should never happen, but we check it here for safty
+			// Bounded random retries must not relax a policy's eligibility rule.
+			if (block_selection_policy == GC_Block_Selection_Policy_Type::RANDOM
+				|| block_selection_policy == GC_Block_Selection_Policy_Type::RANDOM_P
+				|| block_selection_policy == GC_Block_Selection_Policy_Type::RANDOM_PP) {
+				bool full = block_selection_policy != GC_Block_Selection_Policy_Type::RANDOM;
+				unsigned int min_invalid = block_selection_policy == GC_Block_Selection_Policy_Type::RANDOM_PP ? random_pp_threshold : 1;
+				if (!eligible(gc_candidate_block_id, full, min_invalid)) {
+					gc_candidate_block_id = block_no_per_plane;
+					for (flash_block_ID_type id = 0; id < block_no_per_plane; ++id)
+						if (eligible(id, full, min_invalid)) { gc_candidate_block_id = id; break; }
+				}
+			}
+
+			//This should never happen, but we check it here for safety
 			if (gc_candidate_block_id >= block_no_per_plane
 				|| pbke->Ongoing_erase_operations.find(gc_candidate_block_id) != pbke->Ongoing_erase_operations.end()
 				|| !is_safe_gc_wl_candidate(pbke, gc_candidate_block_id)) {
@@ -161,6 +181,11 @@ namespace SSD_Components
 
 			//No invalid page to erase
 			if (block->Current_page_write_index == 0 || block->Invalid_page_count == 0) {
+				return;
+			}
+			if (!has_gc_copy_capacity(pbke, gc_candidate_block_id)) {
+				// Keep FIFO history when admission waits for existing copies to drain.
+				if (block_selection_policy == GC_Block_Selection_Policy_Type::FIFO) pbke->Block_usage_history.push(gc_candidate_block_id);
 				return;
 			}
 			

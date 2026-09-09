@@ -77,6 +77,8 @@ public:
 	unsigned int SWANS_Migration_Buffer_Limit;
 	unsigned int SWANS_Migration_Working_Queue_Limit;
 	std::string SWANS_Buffered_Write_Completion_Mode;
+	sim_time_type RAID_Telemetry_Period = 40000000000ULL; // ns; zero disables periodic rows
+	bool RAID_Telemetry_Enabled = true;
 	void XML_serialize(Utils::XmlWriter& xmlwriter);
 	void XML_deserialize(rapidxml::xml_node<> *node);
 };

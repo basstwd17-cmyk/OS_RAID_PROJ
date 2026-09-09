@@ -944,6 +944,7 @@ namespace SSD_Components
 		attr = "GC_Barrier_Current_MVPN_Count";
 		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Current_MVPN_barriers));
 		attr = "GC_Barrier_Max_User_Wait_us";
+		xmlwriter.Write_attribute_string_inline("GC_Barrier_Migration_Transaction_Wait_Events", std::to_string(barrier_statistics.Migration_transaction_barrier_wait_events));
 		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Max_user_transaction_wait_time / 1000.0));
 		attr = "GC_Barrier_Max_Lifetime_us";
 		xmlwriter.Write_attribute_string_inline(attr, std::to_string(barrier_statistics.Max_barrier_lifetime / 1000.0));

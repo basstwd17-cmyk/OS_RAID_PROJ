@@ -30,6 +30,7 @@ namespace SSD_Components
 		UserRequestType Type;
 		stream_id_type Stream_id;
 		bool ToBeIgnored;
+		bool Is_migration = false;
 		void* IO_command_info;//used to store host I/O command info
 		void* Data;
 	private:

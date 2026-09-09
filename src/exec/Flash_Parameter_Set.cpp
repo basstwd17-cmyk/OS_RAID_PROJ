@@ -13,7 +13,7 @@ Flash_Parameter_Set::Flash_Parameter_Set()
 	  Page_Program_Latency_CSB(750000),
 	  Page_Program_Latency_MSB(750000),
 	  Block_Erase_Latency(3800000),
-	  Block_PE_Cycles_Limit(10000),
+	  Block_PE_Cycles_Limit(50),
 	  Suspend_Erase_Time(700000),
 	  Suspend_Program_Time(100000),
 	  Die_No_Per_Chip(2),

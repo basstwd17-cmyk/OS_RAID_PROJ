@@ -73,6 +73,12 @@ namespace SSD_Components
 		friend class GC_and_WL_Unit_Page_Level;
 		friend class GC_and_WL_Unit_Base;
 	public:
+		struct Retired_Block_Record {
+			NVM::FlashMemory::Physical_Page_Address Address;
+			sim_time_type Retirement_time;
+			unsigned int Erase_count;
+		};
+		const std::vector<Retired_Block_Record>& Get_bad_block_pool() const { return bad_block_pool; }
 		Flash_Block_Manager_Base(const std::string& device_id, GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
 			unsigned int channel_count, unsigned int chip_no_per_channel, unsigned int die_no_per_chip, unsigned int plane_no_per_die,
 			unsigned int block_no_per_plane, unsigned int page_no_per_block, double overprovisioning_ratio,
@@ -125,7 +131,9 @@ namespace SSD_Components
 		uint64_t total_block_count;
 		uint64_t original_op_block_budget;
 		uint64_t bad_block_count;
-		bool Retire_block_if_worn_out(Block_Pool_Slot_Type* block);
+		std::vector<Retired_Block_Record> bad_block_pool;
+		bool Retire_block_if_worn_out(Block_Pool_Slot_Type* block, const NVM::FlashMemory::Physical_Page_Address& address);
+		void Check_end_of_life();
 		void program_transaction_issued(const NVM::FlashMemory::Physical_Page_Address& page_address);//Updates the block bookkeeping record
 	};
 }

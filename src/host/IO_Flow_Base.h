@@ -107,6 +107,11 @@ namespace Host_Components
 		sim_time_type STAT_transferred_bytes_total, STAT_transferred_bytes_read, STAT_transferred_bytes_write;
 		int progress;
 		int next_progress_step = 0;
+		// A Relay_Count=0 trace has no fixed total request count. In that mode,
+		// preserve MQSim's normal percentage-only console progress by reporting
+		// progress within each full trace replay.
+		uint64_t progress_repeat_size;
+		uint64_t progress_replay_index;
 
 		//Variables used to log response time changes
 		bool enabled_logging;

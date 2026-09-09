@@ -449,7 +449,7 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 	xmlwriter.Write_attribute_string(attr, val);
 
 	attr = "SWANS_Migration_Buffer_Limit";
-	val = std::to_string(SWANS_Migration_Buffer_Limit);
+	val = std::to_string(SWANS_Migration_Working_Queue_Limit); // legacy alias, request count
 	xmlwriter.Write_attribute_string(attr, val);
 
 	attr = "SWANS_Migration_Working_Queue_Limit";
@@ -461,6 +461,8 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 	xmlwriter.Write_attribute_string(attr, val);
 
 	Flash_Parameters.XML_serialize(xmlwriter);
+	xmlwriter.Write_attribute_string("RAID_Telemetry_Enabled", RAID_Telemetry_Enabled ? "true" : "false");
+	xmlwriter.Write_attribute_string("RAID_Telemetry_Period", std::to_string(RAID_Telemetry_Period));
 
 	xmlwriter.Write_close_tag();
 }
@@ -777,7 +779,9 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 			} else if (strcmp(param->name(), "SWANS_Migration_Buffer_Limit") == 0) {
 				std::string val = param->value();
 				SWANS_Migration_Buffer_Limit = std::stoul(val);
-				SWANS_Migration_Working_Queue_Limit = SWANS_Migration_Buffer_Limit;
+				// Explicit canonical option wins, regardless of XML element order.
+				if (node->first_node("SWANS_Migration_Working_Queue_Limit") == nullptr)
+					SWANS_Migration_Working_Queue_Limit = SWANS_Migration_Buffer_Limit;
 			} else if (strcmp(param->name(), "SWANS_Migration_Working_Queue_Limit") == 0) {
 				std::string val = param->value();
 				SWANS_Migration_Working_Queue_Limit = std::stoul(val);
@@ -786,10 +790,20 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 				std::transform(val.begin(), val.end(), val.begin(), ::toupper);
 				SWANS_Buffered_Write_Completion_Mode = val;
 			}
-			else if (strcmp(param->name(), "Flash_Parameter_Set") == 0)
+			else if (strcmp(param->name(), "RAID_Telemetry_Period") == 0) {
+				RAID_Telemetry_Period = std::stoull(param->value());
+			} else if (strcmp(param->name(), "RAID_Telemetry_Enabled") == 0) {
+				const std::string value = param->value();
+				if (value != "true" && value != "false") throw std::invalid_argument("Invalid RAID_Telemetry_Enabled");
+				RAID_Telemetry_Enabled = value == "true";
+			} else if (strcmp(param->name(), "Flash_Parameter_Set") == 0)
 			{
 				Flash_Parameters.XML_deserialize(param);
 			}
+		}
+		SWANS_Migration_Buffer_Limit = SWANS_Migration_Working_Queue_Limit;
+		if (SWANS_Migration_Working_Queue_Limit == 0 || SWANS_Buffered_Write_Completion_Mode != "DEFERRED") {
+			throw std::invalid_argument("Working queue limit must be positive; only DEFERRED completion is supported");
 		}
 		if (End_of_Life_Threshold < 0.0 || End_of_Life_Threshold >= Overprovisioning_Ratio) {
 			PRINT_ERROR("End_of_Life_Threshold must be non-negative and smaller than Overprovisioning_Ratio")

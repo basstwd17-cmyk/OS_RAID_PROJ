@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <unordered_map>
+#include <functional>
 #include "Sim_Defs.h"
 #include "EventTree.h"
 #include "Sim_Object.h"
@@ -34,12 +35,15 @@ namespace MQSimEngine {
 		void Stop_simulation();
 		bool Has_started();
 		bool Is_integrated_execution_mode();
+		// Read-only instrumentation; never inserts events or extends simulation time.
+		void Set_time_advance_observer(const std::function<void(sim_time_type)>& observer) { time_observer = observer; }
 	private:
 		sim_time_type _sim_time;
 		EventTree* _EventList;
 		std::unordered_map<sim_object_id_type, Sim_Object*> _ObjectList;
 		bool stop;
 		bool started;
+		std::function<void(sim_time_type)> time_observer;
 		static Engine* _instance;
 	};
 }

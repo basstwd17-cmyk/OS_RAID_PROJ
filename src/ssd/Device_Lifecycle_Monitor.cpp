@@ -3,12 +3,12 @@
 namespace SSD_Components
 {
 	Device_Lifecycle_Status Device_Lifecycle_Monitor::status;
-	std::function<void()> Device_Lifecycle_Monitor::end_of_life_handler;
+	std::vector<std::function<void()>> Device_Lifecycle_Monitor::end_of_life_handlers;
 
 	void Device_Lifecycle_Monitor::Reset()
 	{
 		status = Device_Lifecycle_Status();
-		end_of_life_handler = std::function<void()>();
+		end_of_life_handlers.clear();
 	}
 
 	bool Device_Lifecycle_Monitor::Report_end_of_life(const std::string& device_id, sim_time_type time,
@@ -27,11 +27,8 @@ namespace SSD_Components
 		status.Remaining_usable_blocks = remaining_usable_blocks;
 		status.Remaining_op_ratio = remaining_op_ratio;
 
-		PRINT_MESSAGE("*** " << device_id << " reached END OF LIFE at " << time
-			<< ": remaining OP ratio=" << remaining_op_ratio
-			<< ", bad blocks=" << bad_block_count << " ***")
-		if (end_of_life_handler) {
-			end_of_life_handler();
+		for (const auto& handler : end_of_life_handlers) {
+			if (handler) handler();
 		}
 		return true;
 	}
@@ -55,6 +52,6 @@ namespace SSD_Components
 
 	void Device_Lifecycle_Monitor::Register_end_of_life_handler(const std::function<void()>& handler)
 	{
-		end_of_life_handler = handler;
+		end_of_life_handlers.push_back(handler);
 	}
 }

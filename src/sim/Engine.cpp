@@ -21,6 +21,7 @@ namespace MQSimEngine
 		_sim_time = 0;
 		stop = false;
 		started = false;
+		time_observer = std::function<void(sim_time_type)>();
 		Utils::Logical_Address_Partitioning_Unit::Reset();
 		SSD_Components::Device_Lifecycle_Monitor::Reset();
 	}
@@ -88,6 +89,9 @@ namespace MQSimEngine
 			EventTreeNode* minNode = _EventList->Get_min_node();
 			ev = minNode->FirstSimEvent;
 
+			if (time_observer && ev->Fire_time > _sim_time) {
+				time_observer(ev->Fire_time);
+			}
 			_sim_time = ev->Fire_time;
 
 			while (ev != NULL) {

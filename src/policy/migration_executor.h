@@ -69,6 +69,13 @@ public:
 	uint64_t Discarded_source_sectors() const { return discarded_source_sectors; }
 	uint64_t Dirty_blocks() const { return dirty_blocks; }
 	uint64_t Max_queue_depth() const { return max_queue_depth; }
+	unsigned int Queue_limit() const { return buffer_limit_per_task; }
+	uint64_t Queued_request_bytes() const;
+	uint64_t Copy_buffer_bytes() const;
+	uint64_t Peak_queued_request_bytes() const { return peak_queued_request_bytes; }
+	uint64_t Peak_copy_buffer_bytes() const { return peak_copy_buffer_bytes; }
+	uint64_t Peak_total_queue_depth() const { return peak_total_queue_depth; }
+	std::function<void(uint64_t, bool)> Task_finished;
 
 private:
 	enum class TaskState {
@@ -125,6 +132,12 @@ private:
 	uint64_t discarded_source_sectors;
 	uint64_t dirty_blocks;
 	uint64_t max_queue_depth;
+	uint64_t peak_queued_request_bytes = 0;
+	uint64_t peak_copy_buffer_bytes = 0;
+	uint64_t peak_total_queue_depth = 0;
+	uint64_t zone_bytes = 0;
+	uint64_t block_bytes = 0;
+	void Update_peaks();
 	std::vector<InflightTask> inflight;	// 지금 진행 중인 migration 작업
 	std::vector<DeferredRequest> replay_queue;	// migration 끝난 후 처리할 요청들
 };

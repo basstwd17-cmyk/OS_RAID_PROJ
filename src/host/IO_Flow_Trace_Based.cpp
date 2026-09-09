@@ -21,7 +21,6 @@ IO_Flow_Trace_Based::IO_Flow_Trace_Based(const sim_object_id_type &name, uint16_
 	}
 	if (repeat_until_eol && this->percentage_to_be_simulated != 100) {
 		this->percentage_to_be_simulated = 100;
-		PRINT_MESSAGE("Relay_Count is zero: Percentage_To_Be_Executed is ignored and the full trace will repeat until EOL")
 	}
 }
 
@@ -119,7 +118,7 @@ void IO_Flow_Trace_Based::Start_simulation()
 	if (repeat_until_eol)
 	{
 		total_requests_to_be_generated = 0;
-		PRINT_MESSAGE("Flow " << ID() << " will repeat the full trace until an SSD reaches EOL (Relay_Count=0)")
+		progress_repeat_size = total_requests_in_file;
 	}
 	else if (total_replay_no == 1)
 	{
@@ -144,9 +143,8 @@ void IO_Flow_Trace_Based::Validate_simulation_config()
 
 void IO_Flow_Trace_Based::Execute_simulator_event(MQSimEngine::Sim_Event *)
 {
-	if (repeat_until_eol && SSD_Components::Device_Lifecycle_Monitor::Has_reached_end_of_life()) {
-		SSD_Components::Device_Lifecycle_Monitor::Record_eol_replay_round(replay_counter);
-		PRINT_MESSAGE("Flow " << ID() << " stopped generating requests after " << replay_counter << " replay round(s) because EOL was reached")
+	if (SSD_Components::Device_Lifecycle_Monitor::Has_reached_end_of_life()) {
+		if (repeat_until_eol) SSD_Components::Device_Lifecycle_Monitor::Record_eol_replay_round(replay_counter);
 		return;
 	}
 
@@ -175,9 +173,7 @@ void IO_Flow_Trace_Based::Execute_simulator_event(MQSimEngine::Sim_Event *)
 			Utils::Helper_Functions::Remove_cr(trace_line);
 			current_trace_line.clear();
 			Utils::Helper_Functions::Tokenize(trace_line, ASCIILineDelimiter, current_trace_line);
-			if (repeat_until_eol) {
-				PRINT_MESSAGE("* Replay round " << replay_counter << " started for " << ID() << " (until EOL)")
-			} else {
+			if (!repeat_until_eol) {
 				PRINT_MESSAGE("* Replay round " << replay_counter << " of " << total_replay_no << " started for " << ID())
 			}
 		}

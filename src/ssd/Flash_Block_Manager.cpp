@@ -144,13 +144,15 @@ namespace SSD_Components
 		plane_record->Invalid_pages_count -= reclaimed_pages;
 
 		block->Erase();
-		if (Retire_block_if_worn_out(block)) {
+		if (Retire_block_if_worn_out(block, block_address)) {
 			const unsigned int retired_free_pages = reclaimed_pages + unwritten_pages;
 			if (plane_record->Free_pages_count < retired_free_pages) {
 				PRINT_ERROR("Free-page accounting underflow while retiring a worn-out block")
 			}
 			plane_record->Total_pages_count -= pages_no_per_block;
 			plane_record->Free_pages_count -= retired_free_pages;
+			// Notify observers after capacity accounting and the pool record are consistent.
+			Check_end_of_life();
 			return;
 		}
 		plane_record->Add_to_free_block_pool(block, gc_and_wl_unit->Use_dynamic_wearleveling());

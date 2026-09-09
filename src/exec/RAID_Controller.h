@@ -64,6 +64,15 @@ public:
 	uint64_t Get_ssd_subrequest_write_sectors(unsigned int disk_id) const;
 	uint64_t Get_total_attributed_host_write_sectors() const;
 	uint64_t Get_ssd_attributed_host_write_sectors(unsigned int disk_id) const;
+	struct Observation {
+		uint64_t Completed_requests, Completed_write_requests, Completed_write_bytes;
+		uint64_t Queue_depth, Queue_bytes, Copy_buffer_bytes, Blocked_requests;
+		uint64_t Migrations, Redirects;
+		double Mu;
+		std::string State;
+	};
+	Observation Get_observation() const;
+	std::function<void(const std::string&, uint64_t)> Observation_event;
 
 private:
 	struct Inflight_Entry
@@ -120,6 +129,7 @@ private:
 	{
 		uint64_t Submitted_requests = 0;
 		uint64_t Completed_requests = 0;
+		uint64_t Completed_write_requests = 0;
 		uint64_t Submitted_read_requests = 0;
 		uint64_t Submitted_write_requests = 0;
 		uint64_t Total_subrequests_dispatched = 0;
@@ -167,6 +177,8 @@ private:
 	{
 		uint64_t Sequence = 0;
 		sim_time_type Start_time = 0;
+		sim_time_type End_time = 0;
+		std::string Status = "ACTIVE";
 		uint64_t Hot_zone = 0;
 		uint64_t Cold_zone = 0;
 		unsigned int Hot_ssd = 0;
@@ -209,6 +221,7 @@ private:
 	Swans_Stats swans_stats;
 	std::vector<Swans_Migration_Record> swans_migration_history;
 	std::deque<SSD_Components::User_Request*> blocked_user_requests;
+	uint64_t peak_blocked_requests = 0;
 
 	SSD_Components::User_Request* Create_sub_request(const SSD_Components::User_Request* original, const RAID_Sub_Request& part) const;
 	io_request_id_type Submit_background_copy(const RAID_Policy::StripeCopyPlan& copy, bool is_write, uint64_t task_index);

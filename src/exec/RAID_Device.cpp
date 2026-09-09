@@ -2,6 +2,9 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <iomanip>
+#include <iostream>
+#include <stdexcept>
 #include "../host/IO_Flow_Base.h"
 #include "../host/SATA_HBA.h"
 #include "../ssd/Host_Interface_NVMe.h"
@@ -19,8 +22,7 @@ namespace {
 	static const bool RAID_REPORT_INCLUDE_PLANE_DETAILS = false;
 	static const bool RAID_REPORT_INCLUDE_HISTOGRAM_BINS = true;
 	static const bool RAID_REPORT_INCLUDE_BACKEND_SSD_DETAILS = true;
-	// The paper reports threshold values 5/15 without a byte unit. This implementation
-	// applies them to the host-request x logical-zone-touch write-count standard deviation.
+	// The agreed write unit is cumulative bytes / SWANS_Balance_Unit_Bytes.
 
 	struct Erase_Distribution_Summary
 	{
@@ -72,6 +74,9 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 	: MQSimEngine::Sim_Object("RAIDDevice")
 {
 	Simulator->AddObject(this);
+	telemetry_enabled = parameters->RAID_Telemetry_Enabled;
+	telemetry_period = parameters->RAID_Telemetry_Period;
+	next_telemetry_time = telemetry_period;
 	ssd_count = parameters->SSD_Count > 0 ? parameters->SSD_Count : 1;  // SSD 개수 저장
 	stripe_unit_lba = parameters->Stripe_Unit_LBA;  // 스트라이프 크기 저장
 	ssd_configs = std::vector<Device_Parameter_Set>(ssd_count, *parameters);
@@ -146,10 +151,20 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 			this->raid_controller->Notify_sub_transaction_completed(ssd_idx, transaction);
 		});
 	} // 각 SSD의 캐시 매니저에 완료 알림 등록
+	raid_controller->Observation_event = [this](const std::string& event, uint64_t migration) {
+		if (telemetry_enabled) Emit_snapshot(event, migration, Capture_snapshot(Simulator->Time(), false));
+	};
+	SSD_Components::Device_Lifecycle_Monitor::Register_end_of_life_handler([this]() {
+		if (eol_captured) return;
+		eol_snapshot = Capture_snapshot(Simulator->Time(), true);
+		eol_captured = true;
+		if (telemetry_enabled) Emit_snapshot("eol", 0, eol_snapshot);
+	});
 }
 
 RAID_Device::~RAID_Device()
 {
+	Simulator->Set_time_advance_observer(std::function<void(sim_time_type)>());
 	delete Host_interface;
 	delete raid_controller;
 	for (auto &ssd : ssds) {
@@ -218,6 +233,16 @@ void RAID_Device::Initialize_io_streams(const std::vector<Host_Components::IO_Fl
 
 void RAID_Device::Start_simulation()
 {
+	if (telemetry_enabled && telemetry_period > 0) {
+		Simulator->Set_time_advance_observer([this](sim_time_type next_event) {
+			// A boundary is sampled after all events at that time, before advancing.
+			while (next_telemetry_time < next_event && !eol_captured) {
+				Emit_snapshot("periodic", 0, Capture_snapshot(next_telemetry_time, false));
+				if (next_telemetry_time > std::numeric_limits<sim_time_type>::max() - telemetry_period) break;
+				next_telemetry_time += telemetry_period;
+			}
+		});
+	}
 }
 
 void RAID_Device::Validate_simulation_config()
@@ -232,6 +257,16 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 {
 	std::string tmp = name_prefix.empty() ? ID() : name_prefix + ".RAIDDevice";
 	xmlwriter.Write_open_tag(tmp);
+	Snapshot final_snapshot = Capture_snapshot(Simulator->Time(), true);
+	if (telemetry_enabled) Emit_snapshot("final", 0, final_snapshot);
+	telemetry.flush();
+	xmlwriter.Write_attribute_string("Telemetry_CSV", telemetry_path);
+	xmlwriter.Write_attribute_string("Telemetry_Sample_Count", std::to_string(telemetry_samples));
+	xmlwriter.Write_attribute_string("Telemetry_Period_ns", std::to_string(telemetry_period));
+	xmlwriter.Write_attribute_string("Termination_Reason", eol_captured ? "EOL" : "EVENT_QUEUE_EMPTY");
+	xmlwriter.Write_attribute_string("EOL_Snapshot_Semantics", "FIRST_RETIREMENT_THRESHOLD_EVENT_BEFORE_INFLIGHT_DRAIN");
+	Write_snapshot_XML(tmp + ".FinalSnapshot", final_snapshot, xmlwriter);
+	if (eol_captured) Write_snapshot_XML(tmp + ".EOLSnapshot", eol_snapshot, xmlwriter);
 	if (Host_interface != nullptr && RAID_REPORT_INCLUDE_HOST_INTERFACE) {
 		Host_interface->Report_results_in_XML(tmp, xmlwriter);
 	}
@@ -368,6 +403,17 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 			xmlwriter.Write_attribute_string("Logical_Host_Write_Bytes_Attributed", std::to_string(attributed_host_write_bytes_to_ssd));
 			xmlwriter.Write_attribute_string("Approx_Flash_Programmed_Bytes", std::to_string(flash_programmed_bytes_to_ssd));
 			xmlwriter.Write_attribute_string("Approx_Flash_Write_Amplification", std::to_string(approx_flash_wa));
+			for (const auto& retired : ftl->BlockManager->Get_bad_block_pool()) {
+				xmlwriter.Write_open_tag(ssd_tag + ".RetiredBlock");
+				xmlwriter.Write_attribute_string("Channel", std::to_string(retired.Address.ChannelID));
+				xmlwriter.Write_attribute_string("Chip", std::to_string(retired.Address.ChipID));
+				xmlwriter.Write_attribute_string("Die", std::to_string(retired.Address.DieID));
+				xmlwriter.Write_attribute_string("Plane", std::to_string(retired.Address.PlaneID));
+				xmlwriter.Write_attribute_string("Block", std::to_string(retired.Address.BlockID));
+				xmlwriter.Write_attribute_string("Retirement_Time_ns", std::to_string(retired.Retirement_time));
+				xmlwriter.Write_attribute_string("Erase_Count", std::to_string(retired.Erase_count));
+				xmlwriter.Write_close_tag();
+			}
 			xmlwriter.Write_close_tag();
 
 			std::string hist_tag = wl_tag + ".EraseHistogram.SSD";

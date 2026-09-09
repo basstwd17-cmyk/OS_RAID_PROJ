@@ -49,6 +49,7 @@ namespace SSD_Components
 		uint64_t Unmatched_MVPN_unlocks = 0;
 		uint64_t Owner_mismatch_unlocks = 0;
 		uint64_t Released_user_transactions = 0;
+		uint64_t Migration_transaction_barrier_wait_events = 0;
 		uint64_t Current_LPA_barriers = 0;
 		uint64_t Current_MVPN_barriers = 0;
 		uint64_t Current_LPA_lock_owners = 0;

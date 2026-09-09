@@ -20,7 +20,8 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 																												STAT_sum_request_delay(0), STAT_sum_request_delay_read(0), STAT_sum_request_delay_write(0),
 																												STAT_min_request_delay(MAXIMUM_TIME), STAT_min_request_delay_read(MAXIMUM_TIME), STAT_min_request_delay_write(MAXIMUM_TIME),
 																												STAT_max_request_delay(0), STAT_max_request_delay_read(0), STAT_max_request_delay_write(0),
-																												STAT_transferred_bytes_total(0), STAT_transferred_bytes_read(0), STAT_transferred_bytes_write(0), progress(0), next_progress_step(0),
+																						STAT_transferred_bytes_total(0), STAT_transferred_bytes_read(0), STAT_transferred_bytes_write(0), progress(0), next_progress_step(0),
+																						progress_repeat_size(0), progress_replay_index(0),
 																												enabled_logging(enabled_logging), logging_period(logging_period), logging_file_path(logging_file_path)
 {
 	Host_IO_Request *t = NULL;
@@ -211,7 +212,16 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 		delete request;
 
 		//Announce simulation progress
-		if (stop_time > 0) {
+		if (progress_repeat_size > 0) {
+			const uint64_t serviced_index = STAT_serviced_request_count - 1;
+			const uint64_t replay_index = serviced_index / progress_repeat_size;
+			if (replay_index != progress_replay_index) {
+				progress_replay_index = replay_index;
+				next_progress_step = 0;
+			}
+			const uint64_t serviced_in_replay = serviced_index % progress_repeat_size + 1;
+			progress = int(serviced_in_replay / (double)progress_repeat_size * 100);
+		} else if (stop_time > 0) {
 			progress = int(Simulator->Time() / (double)stop_time * 100);
 		} else {
 			progress = int(STAT_serviced_request_count / (double)total_requests_to_be_generated * 100);
@@ -339,7 +349,16 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 		delete cqe;
 
 		//Announce simulation progress
-		if (stop_time > 0) {
+		if (progress_repeat_size > 0) {
+			const uint64_t serviced_index = STAT_serviced_request_count - 1;
+			const uint64_t replay_index = serviced_index / progress_repeat_size;
+			if (replay_index != progress_replay_index) {
+				progress_replay_index = replay_index;
+				next_progress_step = 0;
+			}
+			const uint64_t serviced_in_replay = serviced_index % progress_repeat_size + 1;
+			progress = int(serviced_in_replay / (double)progress_repeat_size * 100);
+		} else if (stop_time > 0) {
 			progress = int(Simulator->Time() / (double)stop_time * 100);
 		} else {
 			progress = int(STAT_serviced_request_count / (double)total_requests_to_be_generated * 100);

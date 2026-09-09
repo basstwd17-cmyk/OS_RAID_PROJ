@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 #include "../sim/Sim_Defs.h"
 
 namespace SSD_Components
@@ -46,7 +47,7 @@ namespace SSD_Components
 
 	private:
 		static Device_Lifecycle_Status status;
-		static std::function<void()> end_of_life_handler;
+		static std::vector<std::function<void()>> end_of_life_handlers;
 	};
 }
 

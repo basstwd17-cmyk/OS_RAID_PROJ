@@ -70,6 +70,7 @@ namespace SSD_Components
 		void handle_transaction_serviced_signal_from_PHY(NVM_Transaction_Flash* transaction);
 		bool is_safe_gc_wl_candidate(const PlaneBookKeepingType* pbke, const flash_block_ID_type gc_wl_candidate_block_id);//Checks if block_address is a safe candidate for gc execution, i.e., 1) it is not a write frontier, and 2) there is no ongoing program operation
 		bool check_static_wl_required(const NVM::FlashMemory::Physical_Page_Address plane_address);
+		bool has_gc_copy_capacity(const PlaneBookKeepingType* plane, flash_block_ID_type candidate) const;
 		void run_static_wearleveling(const NVM::FlashMemory::Physical_Page_Address plane_address);
 		bool use_copyback;
 		bool dynamic_wearleveling_enabled;

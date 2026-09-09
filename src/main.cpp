@@ -307,6 +307,7 @@ int main(int argc, char* argv[])
 		
 		// RAID 장치 생성
 		RAID_Device* raid_device = new RAID_Device(&exec_params->SSD_Device_Configuration, &exec_params->Host_Configuration.IO_Flow_Definitions);
+		raid_device->Configure_telemetry_output(workload_defs_file_path.substr(0, workload_defs_file_path.find_last_of('.')) + "_scenario_" + std::to_string(cntr));
 		{
 			Host_System host(&exec_params->Host_Configuration, exec_params->SSD_Device_Configuration.Enabled_Preconditioning, raid_device->Get_host_interface());
 			host.Attach_storage_device(raid_device);

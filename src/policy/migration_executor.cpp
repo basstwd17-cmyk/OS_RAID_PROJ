@@ -48,6 +48,8 @@ void MigrationExecutor::Configure(unsigned int buffer_limit_per_task)
 
 void MigrationExecutor::Start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory)
 {
+	zone_bytes = directory.Zone_size_lba() * SECTOR_SIZE_IN_BYTE;
+	block_bytes = static_cast<uint64_t>(directory.Block_unit_lba()) * SECTOR_SIZE_IN_BYTE;
 	if (!inflight.empty()) {
 		return;
 	}
@@ -110,6 +112,7 @@ MigrationExecutor::AbortSummary MigrationExecutor::Abort_all(ZoneDirectory& dire
 		summary.Deferred_request_count += task.Deferred_requests.size();
 		directory.Mark_migrating(task.Task.Op.Hot_zone, false);
 		directory.Mark_migrating(task.Task.Op.Cold_zone, false);
+		if (Task_finished) Task_finished(task.Task.Op.Hot_zone, true);
 	}
 	inflight.clear();
 	return summary;
@@ -229,6 +232,7 @@ MigrationExecutor::InterceptResult MigrationExecutor::Maybe_intercept(SSD_Compon
 		}
 		task.Deferred_requests.push_back(deferred);
 		max_queue_depth = std::max<uint64_t>(max_queue_depth, task.Deferred_requests.size());
+		Update_peaks();
 		return InterceptResult::BUFFERED;
 	}
 	return InterceptResult::SUBMITTED;
@@ -267,6 +271,7 @@ bool MigrationExecutor::Notify_request_completed(io_request_id_type request_id, 
 			task.Next_restore++;
 			restored_blocks++;
 		}
+		Update_peaks();
 		return true;
 	}
 	return false;
@@ -490,6 +495,7 @@ void MigrationExecutor::Poll(ZoneDirectory& directory,
 					Discard_source_copies(task, discard_source, i);
 					Drain_task(task, directory);
 					task.State = TaskState::DONE;
+					if (Task_finished) Task_finished(task.Task.Op.Hot_zone, false);
 					break;
 				}
 				case TaskState::DONE:
@@ -517,6 +523,42 @@ uint64_t MigrationExecutor::Buffered_count() const
 		count += inflight[i].Deferred_requests.size();
 	}
 	return count;
+}
+
+uint64_t MigrationExecutor::Queued_request_bytes() const
+{
+	uint64_t bytes = 0;
+	for (const auto& task : inflight)
+		for (const auto& queued : task.Deferred_requests)
+			if (queued.Request) bytes += static_cast<uint64_t>(queued.Request->SizeInSectors) * SECTOR_SIZE_IN_BYTE;
+	return bytes;
+}
+
+uint64_t MigrationExecutor::Copy_buffer_bytes() const
+{
+	// Logical payload represented by bitmaps, not C++ allocation size.
+	uint64_t bytes = 0;
+	for (const auto& task : inflight) {
+		if (task.State == TaskState::DONE) continue;
+		std::map<stream_id_type, std::vector<bool>> occupied = task.Buffer.Grabbed_blocks;
+		for (const auto& stream : task.Buffer.Dirty_blocks) {
+			auto& bits = occupied[stream.first];
+			bits.resize(std::max(bits.size(), stream.second.size()), false);
+			for (size_t i = 0; i < stream.second.size(); ++i) bits[i] = bits[i] || stream.second[i];
+		}
+		for (const auto& stream : occupied)
+			for (size_t i = 0; i < stream.second.size(); ++i)
+				if (stream.second[i] && i * block_bytes < zone_bytes)
+					bytes += std::min(block_bytes, zone_bytes - i * block_bytes);
+	}
+	return bytes;
+}
+
+void MigrationExecutor::Update_peaks()
+{
+	peak_queued_request_bytes = std::max(peak_queued_request_bytes, Queued_request_bytes());
+	peak_copy_buffer_bytes = std::max(peak_copy_buffer_bytes, Copy_buffer_bytes());
+	peak_total_queue_depth = std::max(peak_total_queue_depth, Buffered_count());
 }
 
 } // namespace RAID_Policy

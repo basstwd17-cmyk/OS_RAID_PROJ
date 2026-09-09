@@ -186,7 +186,7 @@ namespace SSD_Components
 			}
 		}
 
-		return max_erased_block - min_erased_block;
+		return plane_record->Blocks[max_erased_block].Erase_count - plane_record->Blocks[min_erased_block].Erase_count;
 	}
 
 	flash_block_ID_type Flash_Block_Manager_Base::Get_coldest_block_id(const NVM::FlashMemory::Physical_Page_Address& plane_address)
@@ -285,7 +285,7 @@ namespace SSD_Components
 		return (double)remaining_op_blocks / (double)total_block_count;
 	}
 
-	bool Flash_Block_Manager_Base::Retire_block_if_worn_out(Block_Pool_Slot_Type* block)
+	bool Flash_Block_Manager_Base::Retire_block_if_worn_out(Block_Pool_Slot_Type* block, const NVM::FlashMemory::Physical_Page_Address& address)
 	{
 		if (!bad_block_retirement_enabled || block == NULL || block->Is_bad || max_allowed_block_erase_count == 0
 			|| block->Erase_count < max_allowed_block_erase_count) {
@@ -294,12 +294,22 @@ namespace SSD_Components
 
 		block->Is_bad = true;
 		bad_block_count++;
+		Retired_Block_Record record;
+		record.Address = address;
+		record.Address.PageID = 0;
+		record.Retirement_time = Simulator->Time();
+		record.Erase_count = block->Erase_count;
+		bad_block_pool.push_back(record);
+		return true;
+	}
+
+	void Flash_Block_Manager_Base::Check_end_of_life()
+	{
 		const double remaining_op_ratio = Get_current_op_ratio();
 		if (!eol_reached && remaining_op_ratio <= end_of_life_threshold) {
 			eol_reached = true;
 			Device_Lifecycle_Monitor::Report_end_of_life(device_id, Simulator->Time(), bad_block_count,
 				total_block_count, Get_remaining_usable_block_count(), remaining_op_ratio);
 		}
-		return true;
 	}
 }

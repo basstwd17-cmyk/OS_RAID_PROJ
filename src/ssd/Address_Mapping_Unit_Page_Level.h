@@ -210,7 +210,8 @@ namespace SSD_Components
 		bool request_mapping_entry(const stream_id_type streamID, const LPA_type lpn);
 		void handle_transaction_serviced_signal_from_PHY(NVM_Transaction_Flash* transaction);
 		bool translate_lpa_to_ppa(stream_id_type streamID, NVM_Transaction_Flash* transaction);
-		std::set<NVM_Transaction_Flash_WR*>**** Write_transactions_for_overfull_planes;
+		// FIFO order must not depend on heap addresses or telemetry allocations.
+		std::list<NVM_Transaction_Flash_WR*>**** Write_transactions_for_overfull_planes;
 
 		void generate_flash_read_request_for_mapping_data(const stream_id_type streamID, const LPA_type lpn);
 		void generate_flash_writeback_request_for_mapping_data(const stream_id_type streamID, const LPA_type lpn);

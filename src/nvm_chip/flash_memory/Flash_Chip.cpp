@@ -166,6 +166,7 @@ namespace NVM
 					for (unsigned int planeCntr = 0; planeCntr < command->Address.size(); planeCntr++) {
 						STAT_progamCount++;
 						targetDie->Planes[command->Address[planeCntr].PlaneID]->Progam_count++;
+						targetDie->Planes[command->Address[planeCntr].PlaneID]->Blocks[command->Address[planeCntr].BlockID]->Completed_program_count++;
 						targetDie->Planes[command->Address[planeCntr].PlaneID]->Blocks[command->Address[planeCntr].BlockID]->Pages[command->Address[planeCntr].PageID].Write_metadata(command->Meta_data[planeCntr]);
 					}
 					break;

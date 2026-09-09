@@ -318,13 +318,13 @@ namespace SSD_Components
 	{
 		domains = new AddressMappingDomain*[no_of_input_streams];
 
-		Write_transactions_for_overfull_planes = new std::set<NVM_Transaction_Flash_WR*>***[channel_count];
+		Write_transactions_for_overfull_planes = new std::list<NVM_Transaction_Flash_WR*>***[channel_count];
 		for (unsigned int channel_id = 0; channel_id < channel_count; channel_id++) {
-			Write_transactions_for_overfull_planes[channel_id] = new std::set<NVM_Transaction_Flash_WR*>**[chip_no_per_channel];
+			Write_transactions_for_overfull_planes[channel_id] = new std::list<NVM_Transaction_Flash_WR*>**[chip_no_per_channel];
 			for (unsigned int chip_id = 0; chip_id < chip_no_per_channel; chip_id++) {
-				Write_transactions_for_overfull_planes[channel_id][chip_id] = new std::set<NVM_Transaction_Flash_WR*>*[die_no_per_chip];
+				Write_transactions_for_overfull_planes[channel_id][chip_id] = new std::list<NVM_Transaction_Flash_WR*>*[die_no_per_chip];
 				for (unsigned int die_id = 0; die_id < die_no_per_chip; die_id++) {
-					Write_transactions_for_overfull_planes[channel_id][chip_id][die_id] = new std::set<NVM_Transaction_Flash_WR*>[plane_no_per_die];
+					Write_transactions_for_overfull_planes[channel_id][chip_id][die_id] = new std::list<NVM_Transaction_Flash_WR*>[plane_no_per_die];
 				}
 			}
 		}
@@ -2121,6 +2121,8 @@ namespace SSD_Components
 
 	inline void Address_Mapping_Unit_Page_Level::manage_user_transaction_facing_barrier(NVM_Transaction_Flash* transaction)
 	{
+		if (transaction->UserIORequest && transaction->UserIORequest->Is_migration)
+			barrier_statistics.Migration_transaction_barrier_wait_events++;
 		std::pair<LPA_type, NVM_Transaction_Flash*> entry(transaction->LPA, transaction);
 		domains[transaction->Stream_id]->User_transaction_barrier_wait_start_times.emplace(transaction, Simulator->Time());
 		if (transaction->Type == Transaction_Type::READ) {
@@ -2142,7 +2144,9 @@ namespace SSD_Components
 	void Address_Mapping_Unit_Page_Level::mange_unsuccessful_translation(NVM_Transaction_Flash* transaction)
 	{
 		//Currently, the only unsuccessfull translation would be for program translations that are accessing a plane that is running out of free pages
-		Write_transactions_for_overfull_planes[transaction->Address.ChannelID][transaction->Address.ChipID][transaction->Address.DieID][transaction->Address.PlaneID].insert((NVM_Transaction_Flash_WR*)transaction);
+		auto& waiting = Write_transactions_for_overfull_planes[transaction->Address.ChannelID][transaction->Address.ChipID][transaction->Address.DieID][transaction->Address.PlaneID];
+		if (std::find(waiting.begin(), waiting.end(), transaction) != waiting.end()) return;
+		waiting.push_back((NVM_Transaction_Flash_WR*)transaction);
 		free_block_pool_statistics.Deferred_program_transactions++;
 		free_block_pool_statistics.Current_deferred_program_transactions++;
 		if (free_block_pool_statistics.Current_deferred_program_transactions > free_block_pool_statistics.Maximum_deferred_program_transactions) {
@@ -2152,11 +2156,19 @@ namespace SSD_Components
 
 	void Address_Mapping_Unit_Page_Level::Start_servicing_writes_for_overfull_plane(const NVM::FlashMemory::Physical_Page_Address plane_address)
 	{
-		std::set<NVM_Transaction_Flash_WR*>& waiting_write_list = Write_transactions_for_overfull_planes[plane_address.ChannelID][plane_address.ChipID][plane_address.DieID][plane_address.PlaneID];
+		std::list<NVM_Transaction_Flash_WR*>& waiting_write_list = Write_transactions_for_overfull_planes[plane_address.ChannelID][plane_address.ChipID][plane_address.DieID][plane_address.PlaneID];
 
 		ftl->TSU->Prepare_for_transaction_submit();
 		auto program = waiting_write_list.begin();
 		while (program != waiting_write_list.end()) {
+			// GC can lock the LPA while this write waits for free blocks.
+			if (is_lpa_locked_for_gc((*program)->Stream_id, (*program)->LPA)) {
+				manage_user_transaction_facing_barrier(*program);
+				free_block_pool_statistics.Resumed_program_transactions++;
+				free_block_pool_statistics.Current_deferred_program_transactions--;
+				waiting_write_list.erase(program++);
+				continue;
+			}
 			if (translate_lpa_to_ppa((*program)->Stream_id, *program)) {
 				ftl->TSU->Submit_transaction(*program);
 				free_block_pool_statistics.Resumed_program_transactions++;

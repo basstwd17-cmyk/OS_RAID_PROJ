@@ -63,9 +63,11 @@
 		<SWANS_TH_Critical>15</SWANS_TH_Critical>
 		<SWANS_Balance_Unit_Bytes>1048576</SWANS_Balance_Unit_Bytes>
 		<SWANS_Max_Concurrent_Migrations>1</SWANS_Max_Concurrent_Migrations>
-		<SWANS_Migration_Buffer_Limit>2048</SWANS_Migration_Buffer_Limit>
+		<SWANS_Migration_Buffer_Limit>64</SWANS_Migration_Buffer_Limit>
 		<SWANS_Migration_Working_Queue_Limit>64</SWANS_Migration_Working_Queue_Limit>
 		<SWANS_Buffered_Write_Completion_Mode>DEFERRED</SWANS_Buffered_Write_Completion_Mode>
+		<RAID_Telemetry_Enabled>true</RAID_Telemetry_Enabled>
+		<RAID_Telemetry_Period>40000000000</RAID_Telemetry_Period>
 
 		<Flash_Parameter_Set>
 			<Flash_Technology>MLC</Flash_Technology>

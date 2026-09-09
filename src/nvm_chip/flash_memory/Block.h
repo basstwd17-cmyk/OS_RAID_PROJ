@@ -12,6 +12,7 @@ namespace NVM
 		class Block
 		{
 		public:
+			uint64_t Completed_program_count = 0; // Lifetime page programs; survives erase.
 			Block(unsigned int PagesNoPerBlock, flash_block_ID_type BlockID);
 			~Block();
 			Page* Pages;						//Records the status of each sub-page
