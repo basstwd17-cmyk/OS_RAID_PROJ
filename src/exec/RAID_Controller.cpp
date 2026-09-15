@@ -122,9 +122,6 @@ RAID_Controller::RAID_Controller(const sim_object_id_type& id,
 	});
 
 	if (this->swans_enabled) {
-		SSD_Components::Device_Lifecycle_Monitor::Register_end_of_life_handler([this]() {
-			this->Schedule_swans_event(Simulator->Time() + 1);
-		});
 		uint64_t zone_size_lba = this->swans_zone_size_lba;
 		if (zone_size_lba == 0) {
 			const unsigned int stripes_per_zone = zone_stripe_multiplier == 0 ? 1 : zone_stripe_multiplier;

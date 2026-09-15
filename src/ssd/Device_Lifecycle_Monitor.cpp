@@ -1,4 +1,5 @@
 #include "Device_Lifecycle_Monitor.h"
+#include "../sim/Engine.h"
 
 namespace SSD_Components
 {
@@ -26,6 +27,10 @@ namespace SSD_Components
 		status.Total_block_count = total_block_count;
 		status.Remaining_usable_blocks = remaining_usable_blocks;
 		status.Remaining_op_ratio = remaining_op_ratio;
+
+		// EOL is a hard simulation boundary. Stop the event engine before
+		// notifying observers so normal simulated work cannot resume.
+		Simulator->Stop_simulation();
 
 		for (const auto& handler : end_of_life_handlers) {
 			if (handler) handler();

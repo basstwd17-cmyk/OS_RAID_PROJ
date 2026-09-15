@@ -257,14 +257,14 @@ void RAID_Device::Report_results_in_XML(std::string name_prefix, Utils::XmlWrite
 {
 	std::string tmp = name_prefix.empty() ? ID() : name_prefix + ".RAIDDevice";
 	xmlwriter.Write_open_tag(tmp);
-	Snapshot final_snapshot = Capture_snapshot(Simulator->Time(), true);
+	Snapshot final_snapshot = eol_captured ? eol_snapshot : Capture_snapshot(Simulator->Time(), true);
 	if (telemetry_enabled) Emit_snapshot("final", 0, final_snapshot);
 	telemetry.flush();
 	xmlwriter.Write_attribute_string("Telemetry_CSV", telemetry_path);
 	xmlwriter.Write_attribute_string("Telemetry_Sample_Count", std::to_string(telemetry_samples));
 	xmlwriter.Write_attribute_string("Telemetry_Period_ns", std::to_string(telemetry_period));
 	xmlwriter.Write_attribute_string("Termination_Reason", eol_captured ? "EOL" : "EVENT_QUEUE_EMPTY");
-	xmlwriter.Write_attribute_string("EOL_Snapshot_Semantics", "FIRST_RETIREMENT_THRESHOLD_EVENT_BEFORE_INFLIGHT_DRAIN");
+	xmlwriter.Write_attribute_string("EOL_Snapshot_Semantics", "FIRST_RETIREMENT_THRESHOLD_EVENT_IMMEDIATE_STOP_NO_DRAIN");
 	Write_snapshot_XML(tmp + ".FinalSnapshot", final_snapshot, xmlwriter);
 	if (eol_captured) Write_snapshot_XML(tmp + ".EOLSnapshot", eol_snapshot, xmlwriter);
 	if (Host_interface != nullptr && RAID_REPORT_INCLUDE_HOST_INTERFACE) {

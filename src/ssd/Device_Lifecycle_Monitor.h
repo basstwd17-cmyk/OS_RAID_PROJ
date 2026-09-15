@@ -27,8 +27,7 @@ namespace SSD_Components
 		}
 	};
 
-	// Stores the first SSD that reaches EOL. Trace flows use this signal to stop
-	// generating new requests while already-issued simulator events drain normally.
+	// Stores the first SSD that reaches EOL and stops the simulator immediately.
 	class Device_Lifecycle_Monitor
 	{
 	public:

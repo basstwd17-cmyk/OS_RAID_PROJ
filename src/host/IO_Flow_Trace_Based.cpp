@@ -80,6 +80,11 @@ void IO_Flow_Trace_Based::SATA_consume_io_request(Host_IO_Request *io_request)
 void IO_Flow_Trace_Based::Start_simulation()
 {
 	IO_Flow_Base::Start_simulation();
+	if (repeat_until_eol) {
+		SSD_Components::Device_Lifecycle_Monitor::Register_end_of_life_handler([this]() {
+			SSD_Components::Device_Lifecycle_Monitor::Record_eol_replay_round(replay_counter);
+		});
+	}
 	std::string trace_line;
 	char *pEnd;
 

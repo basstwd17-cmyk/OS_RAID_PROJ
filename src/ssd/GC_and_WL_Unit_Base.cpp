@@ -1,4 +1,5 @@
 #include "GC_and_WL_Unit_Base.h"
+#include "Device_Lifecycle_Monitor.h"
 
 namespace SSD_Components
 {
@@ -161,6 +162,11 @@ namespace SSD_Components
 			case Transaction_Type::ERASE:
 				pbke->Ongoing_erase_operations.erase(pbke->Ongoing_erase_operations.find(transaction->Address.BlockID));
 				block_manager->Add_erased_block_to_pool(transaction->Address);
+				if (Device_Lifecycle_Monitor::Has_reached_end_of_life()) {
+					// The erase that retired this block is the EOL boundary. Do not
+					// finish GC bookkeeping, resume writes, start WL, or launch GC.
+					return;
+				}
 				block_manager->GC_WL_finished(transaction->Address);
 				if (check_static_wl_required(transaction->Address)) {
 					run_static_wearleveling(transaction->Address);

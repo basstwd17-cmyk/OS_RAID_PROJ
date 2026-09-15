@@ -101,6 +101,15 @@ namespace MQSimEngine
 				Sim_Event* consumed_event = ev;
 				ev = ev->Next_event;
 				delete consumed_event;
+				if (stop) {
+					// Do not execute other events that share the EOL timestamp.
+					while (ev != NULL) {
+						Sim_Event* skipped_event = ev;
+						ev = ev->Next_event;
+						delete skipped_event;
+					}
+					break;
+				}
 			}
 			_EventList->Remove(minNode);
 		}
