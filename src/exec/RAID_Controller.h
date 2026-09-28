@@ -4,6 +4,7 @@
 #include <functional>
 #include <deque>
 #include <limits>
+#include <set>
 #include <unordered_map>
 #include <vector>
 #include "../policy/migration_executor.h"
@@ -27,6 +28,7 @@ struct RAID_Sub_Request
 
 class RAID_Controller : public SSD_Components::Data_Cache_Manager_Base
 {
+	friend struct RAID_Controller_Test_Access;
 public:
 	RAID_Controller(const sim_object_id_type& id,
 		SSD_Components::Host_Interface_Base* host_interface,
@@ -156,6 +158,7 @@ private:
 		uint64_t Migration_aborted_by_eol = 0;
 		uint64_t Migration_deferred_requests_aborted_by_eol = 0;
 		uint64_t Migration_barrier_waits = 0;
+		uint64_t Read_pause_requests = 0;
 		uint64_t Buffered_requests = 0;
 		uint64_t Buffered_write_requests = 0;
 		uint64_t Buffered_write_sectors = 0;
@@ -221,13 +224,13 @@ private:
 	Swans_Stats swans_stats;
 	std::vector<Swans_Migration_Record> swans_migration_history;
 	std::deque<SSD_Components::User_Request*> blocked_user_requests;
+	std::set<io_request_id_type> cached_write_requests;
 	uint64_t peak_blocked_requests = 0;
 
 	SSD_Components::User_Request* Create_sub_request(const SSD_Components::User_Request* original, const RAID_Sub_Request& part) const;
 	io_request_id_type Submit_background_copy(const RAID_Policy::StripeCopyPlan& copy, bool is_write, uint64_t task_index);
 	bool Discard_migration_source(const RAID_Policy::StripeCopyPlan& copy, uint64_t task_index);
-	void Observe_buffered_hot_write(const RAID_Policy::MigrationTask& task, const SSD_Components::User_Request* request);
-	void Complete_buffered_user_request(SSD_Components::User_Request* request);
+	void Record_migration_wait(const RAID_Policy::MigrationExecutor::DeferredRequest& deferred);
 	void Try_replay_blocked_requests();
 	unsigned int Swans_mapping_chunk_length(const RAID_Policy::ZoneResolveResult& resolved, unsigned int remaining) const;
 	std::vector<uint64_t> Collect_zone_ids(LHA_type lba, unsigned int lba_count) const;

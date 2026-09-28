@@ -4,6 +4,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <set>
 #include <vector>
 #include "swans_policy_types.h"
 #include "zone_directory.h"
@@ -16,13 +17,13 @@ class MigrationExecutor
 public:
 	enum class InterceptResult {
 		SUBMITTED,
+		PRIORITY_READ,
 		BUFFERED,
 		BACKPRESSURE
 	};
 
 	struct DeferredRequest {
 		SSD_Components::User_Request* Request = nullptr;
-		bool Complete_without_dispatch = false;
 		sim_time_type Enqueue_time = 0;
 	};
 
@@ -33,7 +34,6 @@ public:
 
 	typedef std::function<io_request_id_type(const StripeCopyPlan&, bool is_write, uint64_t task_index)> SubmitCopyFunction;
 	typedef std::function<bool(const StripeCopyPlan&, uint64_t task_index)> DiscardFunction;
-	typedef std::function<void(const MigrationTask&, const SSD_Components::User_Request*)> BufferedWriteObserveFunction;
 
 	MigrationExecutor();
 	explicit MigrationExecutor(unsigned int buffer_limit_per_task);
@@ -45,16 +45,20 @@ public:
 	// this to wait for the completion callback instead of continuously polling
 	// the simulator while flash I/O is in flight.
 	bool Has_active_copy() const;
-	// A request that intersects any active task must not be replayed against a
+	// A cached write that intersects any active task must not be replayed against a
 	// zone whose placement is still changing.
 	bool Intersects_inflight_zones(const std::vector<uint64_t>& request_zone_ids) const;
 	AbortSummary Abort_all(ZoneDirectory& directory);
 
 	InterceptResult Maybe_intercept(SSD_Components::User_Request* request,
 		const std::vector<uint64_t>& request_zone_ids,
-		ZoneDirectory& directory,
-		const BufferedWriteObserveFunction& observe_buffered_write = BufferedWriteObserveFunction(),
 		sim_time_type enqueue_time = 0);
+	// Pause every task touched by a read until the entire user request completes.
+	// Already submitted flash I/O finishes before the read is released.
+	std::vector<DeferredRequest> Drain_ready_reads();
+	bool Is_priority_read(const io_request_id_type& request_id) const;
+	bool Has_priority_reads() const;
+	void Notify_read_completed(const io_request_id_type& request_id);
 	bool Notify_request_completed(io_request_id_type request_id, ZoneDirectory& directory);
 	void Poll(ZoneDirectory& directory,
 		const SubmitCopyFunction& submit_copy,
@@ -81,27 +85,16 @@ private:
 	enum class TaskState {
 		IDLE,
 		GRABBING,
-		SWAPPING,
 		RESTORING,
 		DRAINING_QUEUE,
 		DONE
 	};
 
-	enum class RestoreBlockState {
-		NOT_SCHEDULED,
-		SCHEDULED,
-		IN_FLIGHT,
-		COMPLETED
-	};
-
 	struct InflightTask {
 		MigrationTask Task;	// hot/cold 쌍 + 복사할 stripe 목록
 		MigrationBuffer Buffer;
-		std::vector<StripeCopyPlan> Restore_copies;
-		std::map<stream_id_type, std::vector<RestoreBlockState>> Restore_block_states;
-		std::map<stream_id_type, std::vector<bool>> Restore_after_active_write;
 		std::map<stream_id_type, std::vector<bool>> Discarded_source_blocks;
-		std::deque<std::pair<stream_id_type, unsigned int>> Pending_source_discards;
+		std::set<io_request_id_type> Priority_reads;
 		size_t Next_grab = 0;
 		size_t Next_restore = 0;
 		TaskState State = TaskState::IDLE;
@@ -112,15 +105,8 @@ private:
 	};		
 
 	bool Is_intercept_target(const InflightTask& task, const std::vector<uint64_t>& request_zone_ids) const;
-	bool Hits_zone(uint64_t zone_id, const std::vector<uint64_t>& request_zone_ids) const;
-	bool Hits_only_zone(uint64_t zone_id, const std::vector<uint64_t>& request_zone_ids) const;
-	void Mark_dirty_blocks(InflightTask& task, const SSD_Components::User_Request* request, ZoneDirectory& directory);
-	void Append_restore_copy(InflightTask& task, stream_id_type stream_id, unsigned int block_offset, const ZoneDirectory& directory);
-	void Request_restore_after_dirty(InflightTask& task, stream_id_type stream_id, unsigned int block_offset, const ZoneDirectory& directory);
-	void Build_restore_copies(InflightTask& task, ZoneDirectory& directory);
 	void Discard_source_block(InflightTask& task, stream_id_type stream_id, unsigned int block_offset,
 		const DiscardFunction& discard_source, uint64_t task_index);
-	void Drain_pending_source_discards(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index);
 	void Discard_source_copies(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index);
 	void Drain_task(InflightTask& task, ZoneDirectory& directory);
 
@@ -140,6 +126,7 @@ private:
 	void Update_peaks();
 	std::vector<InflightTask> inflight;	// 지금 진행 중인 migration 작업
 	std::vector<DeferredRequest> replay_queue;	// migration 끝난 후 처리할 요청들
+	std::deque<DeferredRequest> pending_reads;
 };
 
 } // namespace RAID_Policy

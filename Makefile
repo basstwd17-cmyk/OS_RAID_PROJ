@@ -18,7 +18,7 @@ $1/%.o: %.cpp
 	$(CC) $(CC_FLAGS) $(INCLUDES) -c $$< -o $$@
 endef
 
-.PHONY: all checkdirs clean
+.PHONY: all checkdirs clean test
 
 ifeq ($(OS),Windows_NT)
 MKDIR_CMD = if not exist "$@" mkdir "$@"
@@ -34,6 +34,10 @@ all: checkdirs MQSim
 
 MQSim: $(OBJ)
 	$(LD) $^ -o $@
+
+test: checkdirs $(filter-out build/main.o,$(OBJ))
+	$(CC) $(CC_FLAGS) $(INCLUDES) tests/migration_io_priority.cpp $(filter-out build/main.o,$(OBJ)) -o build/migration_io_priority
+	./build/migration_io_priority
 
 checkdirs: $(BUILD_DIR)
 
