@@ -602,12 +602,16 @@ namespace SSD_Components
 		PPA_type ppa = domains[streamID]->Get_ppa(ideal_mapping_table, streamID, transaction->LPA);
 
 		if (transaction->Type == Transaction_Type::READ) {
+			const bool initializes_read_data = ppa == NO_PPA;
 			if (ppa == NO_PPA) {
 				ppa = online_create_entry_for_reads(transaction->LPA, streamID, transaction->Address, ((NVM_Transaction_Flash_RD*)transaction)->read_sectors_bitmap);
 			}
 			transaction->PPA = ppa;
 			Convert_ppa_to_address(transaction->PPA, transaction->Address);
-			block_manager->Read_transaction_issued(transaction->Address);
+			// Initial allocation already registered this read before checking GC.
+			if (!initializes_read_data) {
+				block_manager->Read_transaction_issued(transaction->Address);
+			}
 			transaction->Physical_address_determined = true;
 			
 			return true;
@@ -1501,9 +1505,16 @@ namespace SSD_Components
 				PRINT_ERROR("Unknown plane allocation scheme type!")
 		}
 
-		block_manager->Allocate_block_and_page_in_plane_for_user_write(stream_id, read_address);
+		block_manager->Allocate_block_and_page_in_plane_for_read_initialization(stream_id, read_address);
 		PPA_type ppa = Convert_address_to_ppa(read_address);
 		domain->Update_mapping_info(ideal_mapping_table, stream_id, lpa, ppa, read_sectors_bitmap);
+		// Synthetic initial data has no program command to populate its OOB
+		// metadata. GC still needs the LPA to lock and copy this valid page.
+		// This only sets metadata; it adds no program latency or wear.
+		flash_controller->Change_flash_page_status_for_preconditioning(read_address, lpa);
+		if (read_address.PageID + 1 == pages_no_per_block) {
+			ftl->GC_and_WL_Unit->Check_gc_required(block_manager->Get_pool_size(read_address), read_address);
+		}
 
 		return ppa;
 	}
