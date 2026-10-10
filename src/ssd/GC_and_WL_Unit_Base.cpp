@@ -103,6 +103,14 @@ namespace SSD_Components
 					}
 				}
 
+				// A previous search may have rejected every block while user I/O
+				// was in flight. If the last I/O makes a block safe and no erase is
+				// pending to drive another check, retry GC now. Check_gc_required
+				// still enforces the normal threshold, policy and copy capacity.
+				if (pbke->Ongoing_erase_operations.empty()
+					&& block_manager->Can_execute_gc_wl(transaction->Address)) {
+					Check_gc_required(pbke->Get_free_block_pool_size(), transaction->Address);
+				}
 				return;
 		}
 
