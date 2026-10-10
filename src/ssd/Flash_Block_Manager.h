@@ -17,6 +17,7 @@ namespace SSD_Components
 			bool bad_block_retirement_enabled, double end_of_life_threshold);
 		~Flash_Block_Manager();
 		void Allocate_block_and_page_in_plane_for_user_write(const stream_id_type stream_id, NVM::FlashMemory::Physical_Page_Address& address);
+		void Allocate_block_and_page_in_plane_for_read_initialization(const stream_id_type stream_id, NVM::FlashMemory::Physical_Page_Address& address);
 		void Allocate_block_and_page_in_plane_for_gc_write(const stream_id_type stream_id, NVM::FlashMemory::Physical_Page_Address& address);
 		void Allocate_Pages_in_block_and_invalidate_remaining_for_preconditioning(const stream_id_type stream_id, const NVM::FlashMemory::Physical_Page_Address& plane_address, std::vector<NVM::FlashMemory::Physical_Page_Address>& page_addresses);
 		void Allocate_block_and_page_in_plane_for_translation_write(const stream_id_type stream_id, NVM::FlashMemory::Physical_Page_Address& address, bool is_for_gc);
@@ -25,6 +26,7 @@ namespace SSD_Components
 		void Add_erased_block_to_pool(const NVM::FlashMemory::Physical_Page_Address& address);
 		unsigned int Get_pool_size(const NVM::FlashMemory::Physical_Page_Address& plane_address);
 	private:
+		void Allocate_user_page(const stream_id_type stream_id, NVM::FlashMemory::Physical_Page_Address& address, bool for_read_initialization);
 	};
 }
 
