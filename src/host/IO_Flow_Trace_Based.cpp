@@ -3,6 +3,7 @@
 #include "ASCII_Trace_Definition.h"
 #include "../utils/DistributionTypes.h"
 #include "../ssd/Device_Lifecycle_Monitor.h"
+#include <stdexcept>
 
 namespace Host_Components
 {
@@ -10,10 +11,19 @@ IO_Flow_Trace_Based::IO_Flow_Trace_Based(const sim_object_id_type &name, uint16_
 										 uint16_t nvme_submission_queue_size, uint16_t nvme_completion_queue_size, IO_Flow_Priority_Class::Priority priority_class, double initial_occupancy_ratio,
 										 std::string trace_file_path, Trace_Time_Unit time_unit, unsigned int total_replay_count, unsigned int percentage_to_be_simulated,
 										 HostInterface_Types SSD_device_type, PCIe_Root_Complex *pcie_root_complex, SATA_HBA *sata_hba,
-										 bool enabled_logging, sim_time_type logging_period, std::string logging_file_path) : IO_Flow_Base(name, flow_id, start_lsa_on_device, end_lsa_on_device, io_queue_id, nvme_submission_queue_size, nvme_completion_queue_size, priority_class, 0, initial_occupancy_ratio, 0, SSD_device_type, pcie_root_complex, sata_hba, enabled_logging, logging_period, logging_file_path),
+										 bool enabled_logging, sim_time_type logging_period, std::string logging_file_path, const std::string& trace_directory, const std::string& extension, unsigned int seed, uint64_t gap_ns) : IO_Flow_Base(name, flow_id, start_lsa_on_device, end_lsa_on_device, io_queue_id, nvme_submission_queue_size, nvme_completion_queue_size, priority_class, 0, initial_occupancy_ratio, 0, SSD_device_type, pcie_root_complex, sata_hba, enabled_logging, logging_period, logging_file_path),
 																									  trace_file_path(trace_file_path), time_unit(time_unit), total_replay_no(total_replay_count), percentage_to_be_simulated(percentage_to_be_simulated),
 																									  replay_counter(1), repeat_until_eol(total_replay_count == 0), total_requests_in_file(0), time_offset(0)
 {
+	pool_enabled = !trace_directory.empty();
+	pool_seed = seed;
+	pool_gap_ns = gap_ns;
+	if (pool_enabled) {
+		if (!repeat_until_eol || percentage_to_be_simulated != 100 || !trace_file_path.empty())
+			throw std::invalid_argument("Trace_Directory requires Relay_Count=0, Percentage_To_Be_Executed=100 and an empty File_Path");
+		pool.Initialize(trace_directory, extension, seed, time_unit, gap_ns);
+		this->trace_file_path = pool.Files().front();
+	}
 	if (this->percentage_to_be_simulated > 100)
 	{
 		this->percentage_to_be_simulated = 100;
@@ -26,6 +36,31 @@ IO_Flow_Trace_Based::IO_Flow_Trace_Based(const sim_object_id_type &name, uint16_
 
 IO_Flow_Trace_Based::~IO_Flow_Trace_Based()
 {
+}
+
+void IO_Flow_Trace_Based::Report_results_in_XML(std::string prefix, Utils::XmlWriter& xmlwriter)
+{
+	IO_Flow_Base::Report_results_in_XML(prefix, xmlwriter);
+	if (!pool_enabled) return;
+	auto escaped = [](const std::string& value) {
+		std::string result;
+		for (char ch : value) {
+			if (ch == '&') result += "&amp;";
+			else if (ch == '<') result += "&lt;";
+			else if (ch == '>') result += "&gt;";
+			else result += ch;
+		}
+		return result;
+	};
+	xmlwriter.Write_open_tag(prefix + ".TracePool");
+	xmlwriter.Write_attribute_string("Flow_ID", ID());
+	xmlwriter.Write_attribute_string("Seed", std::to_string(pool_seed));
+	xmlwriter.Write_attribute_string("Inter_File_Gap_NS", std::to_string(pool_gap_ns));
+	xmlwriter.Write_attribute_string("Sampling", "UNIFORM_WITH_REPLACEMENT_SORTED_FILES_MT19937");
+	xmlwriter.Write_attribute_string("Replay_Round", std::to_string(pool.Round()));
+	xmlwriter.Write_attribute_string("Current_File", escaped(pool.Current_file()));
+	for (const auto& path : pool.Files()) xmlwriter.Write_attribute_string("Trace_File", escaped(path));
+	xmlwriter.Write_close_tag();
 }
 
 Host_IO_Request *IO_Flow_Trace_Based::Generate_next_request()
@@ -77,6 +112,15 @@ void IO_Flow_Trace_Based::SATA_consume_io_request(Host_IO_Request *io_request)
 	IO_Flow_Base::SATA_consume_io_request(io_request);
 }
 
+void IO_Flow_Trace_Based::Prepare_pool_request()
+{
+	const auto r = pool.Next();
+	replay_counter = static_cast<unsigned int>(pool.Round());
+	current_trace_line = {std::to_string(r.Time), std::to_string(r.Device),
+		std::to_string(r.Lba), std::to_string(r.Sectors), r.Write ? "0" : "1"};
+	Simulator->Register_sim_event(r.Time, this);
+}
+
 void IO_Flow_Trace_Based::Start_simulation()
 {
 	IO_Flow_Base::Start_simulation();
@@ -84,6 +128,12 @@ void IO_Flow_Trace_Based::Start_simulation()
 		SSD_Components::Device_Lifecycle_Monitor::Register_end_of_life_handler([this]() {
 			SSD_Components::Device_Lifecycle_Monitor::Record_eol_replay_round(replay_counter);
 		});
+	}
+	if (pool_enabled) {
+		total_requests_to_be_generated = 0;
+		progress_repeat_size = pool.Requests();
+		Prepare_pool_request();
+		return;
 	}
 	std::string trace_line;
 	char *pEnd;
@@ -159,6 +209,10 @@ void IO_Flow_Trace_Based::Execute_simulator_event(MQSimEngine::Sim_Event *)
 		Submit_io_request(request);
 	}
 
+	if (pool_enabled) {
+		if (!SSD_Components::Device_Lifecycle_Monitor::Has_reached_end_of_life()) Prepare_pool_request();
+		return;
+	}
 	if (repeat_until_eol || STAT_generated_request_count < total_requests_to_be_generated)
 	{
 		std::string trace_line;

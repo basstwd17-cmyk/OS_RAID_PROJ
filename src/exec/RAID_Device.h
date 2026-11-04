@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <fstream>
+#include "../ssd/TEC_Wear.h"
 #include "../sim/Sim_Object.h"
 #include "../sim/Sim_Reporter.h"
 #include "../ssd/Host_Interface_Base.h"
@@ -40,12 +41,15 @@ private:
 	struct SSD_Observation {
 		uint64_t Programs = 0, Erases = 0, Bad_blocks = 0, Host_bytes = 0, Programmed_bytes = 0;
 		double Block_program_SD = 0, Block_erase_SD = 0;
+		SSD_Components::TECWearSnapshot Wear;
+		double Remaining_op_ratio = 0;
 	};
 	struct Snapshot {
 		sim_time_type Time = 0;
 		RAID_Controller::Observation Host{};
 		std::vector<SSD_Observation> SSDs;
 	};
+	double logical_blocks_per_ssd = 0;
 	bool telemetry_enabled = false, eol_captured = false;
 	sim_time_type telemetry_period = 0, next_telemetry_time = 0;
 	uint64_t telemetry_samples = 0;

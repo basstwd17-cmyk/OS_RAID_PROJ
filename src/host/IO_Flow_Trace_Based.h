@@ -5,6 +5,7 @@
 #include <iostream>
 #include <fstream>
 #include "IO_Flow_Base.h"
+#include "Trace_Pool.h"
 #include "ASCII_Trace_Definition.h"
 
 namespace Host_Components
@@ -16,7 +17,9 @@ public:
 						uint16_t nvme_submission_queue_size, uint16_t nvme_completion_queue_size, IO_Flow_Priority_Class::Priority priority_class, double initial_occupancy_ratio,
 						std::string trace_file_path, Trace_Time_Unit time_unit, unsigned int total_replay_count, unsigned int percentage_to_be_simulated,
 						HostInterface_Types SSD_device_type, PCIe_Root_Complex *pcie_root_complex, SATA_HBA *sata_hba,
-						bool enabled_logging, sim_time_type logging_period, std::string logging_file_path);
+						bool enabled_logging, sim_time_type logging_period, std::string logging_file_path,
+						const std::string& trace_directory = "", const std::string& extension = ".trace",
+						unsigned int seed = 1, uint64_t gap_ns = 1);
 	~IO_Flow_Trace_Based();
 	Host_IO_Request *Generate_next_request();
 	void NVMe_consume_io_request(Completion_Queue_Entry *);
@@ -24,11 +27,17 @@ public:
 	void Start_simulation();
 	void Validate_simulation_config();
 	void Execute_simulator_event(MQSimEngine::Sim_Event *);
+	void Report_results_in_XML(std::string name_prefix, Utils::XmlWriter& xmlwriter) override;
 	void Get_statistics(Utils::Workload_Statistics &stats,
 						const std::function<LPA_type(LHA_type lha)>& Convert_host_logical_address_to_device_address,
 						const std::function<page_status_type(LHA_type lha)>& Find_NVM_subunit_access_bitmap);
 
 private:
+	bool pool_enabled = false;
+	unsigned int pool_seed = 1;
+	uint64_t pool_gap_ns = 1;
+	TracePool pool;
+	void Prepare_pool_request();
 	Trace_Time_Unit time_unit;
 	unsigned int percentage_to_be_simulated;
 	std::string trace_file_path;

@@ -73,6 +73,16 @@ namespace {
 RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_Parameter_Set*>* io_flows)
 	: MQSimEngine::Sim_Object("RAIDDevice")
 {
+	if (parameters->SWANS_Reserve_Zone_Enabled) {
+		if (!parameters->SWANS_Enabled) throw std::invalid_argument("Reserve zones require SWANS_Enabled=true");
+		if (io_flows->size() != 1) throw std::invalid_argument("Reserve exchange currently requires one I/O flow (one backend address domain)");
+		if (parameters->Memory_Type != NVM::NVM_Type::FLASH)
+			throw std::invalid_argument("Reserve exchange requires a flash backend");
+		if (parameters->Address_Mapping != SSD_Components::Flash_Address_Mapping_Type::PAGE_LEVEL)
+			throw std::invalid_argument("Reserve exchange requires PAGE_LEVEL address mapping with discard support");
+		if (io_flows->front()->Device_Level_Data_Caching_Mode != SSD_Components::Caching_Mode::TURNED_OFF)
+			throw std::invalid_argument("Reserve exchange currently requires Device_Level_Data_Caching_Mode=TURNED_OFF");
+	}
 	Simulator->AddObject(this);
 	telemetry_enabled = parameters->RAID_Telemetry_Enabled;
 	telemetry_period = parameters->RAID_Telemetry_Period;
@@ -86,12 +96,22 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 		ssds.back()->Host_interface->Set_internal_submission(true);
 	}
 	LHA_type per_ssd_lha_count = Utils::Logical_Address_Partitioning_Unit::Get_total_device_lha_count();
-	LHA_type raid_visible_lha_count = per_ssd_lha_count;
-	if (ssd_count > 1 && per_ssd_lha_count > 0) {
-		if (per_ssd_lha_count > std::numeric_limits<LHA_type>::max() / ssd_count) {
+	LHA_type per_ssd_visible = per_ssd_lha_count;
+	if (parameters->SWANS_Reserve_Zone_Enabled) {
+		const uint64_t zone = parameters->SWANS_Zone_Size_LBA ? parameters->SWANS_Zone_Size_LBA
+			: static_cast<uint64_t>(parameters->Stripe_Unit_LBA) * std::max(1U, parameters->Zone_Stripe_Multiplier);
+		const uint64_t page = parameters->Flash_Parameters.Page_Capacity / SECTOR_SIZE_IN_BYTE;
+		if (!zone || !page || zone % page || !parameters->Stripe_Unit_LBA || zone % parameters->Stripe_Unit_LBA
+			|| per_ssd_lha_count / zone < 2)
+			throw std::invalid_argument("Reserve requires at least two full zones per SSD, aligned to pages and stripes");
+		per_ssd_visible = (per_ssd_lha_count / zone - 1) * zone;
+	}
+	LHA_type raid_visible_lha_count = per_ssd_visible;
+	if (ssd_count > 1 && per_ssd_visible > 0) {
+		if (per_ssd_visible > std::numeric_limits<LHA_type>::max() / ssd_count) {
 			raid_visible_lha_count = std::numeric_limits<LHA_type>::max();
 		} else {
-			raid_visible_lha_count = per_ssd_lha_count * ssd_count;
+			raid_visible_lha_count = per_ssd_visible * ssd_count;
 		}
 	}
 	uint64_t page_lba_count = parameters->Flash_Parameters.Page_Capacity / SECTOR_SIZE_IN_BYTE;
@@ -103,6 +123,10 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 		zone_block_lba_64 = parameters->Stripe_Unit_LBA == 0 ? 1 : parameters->Stripe_Unit_LBA;
 	}
 	unsigned int zone_block_lba = static_cast<unsigned int>(zone_block_lba_64);
+	// MQSim initializes unmapped pages on read. Reading whole erase blocks
+	// would therefore create new data in unused pages during migration.
+	// Reserve exchange tracks/copies touched pages, never untouched pages.
+	if (parameters->SWANS_Reserve_Zone_Enabled) zone_block_lba = static_cast<unsigned int>(page_lba_count);
 
 	raid_controller = new RAID_Controller(ID() + ".RAIDController", nullptr, (unsigned int)io_flows->size(), ssd_count,
 		parameters->Stripe_Unit_LBA,
@@ -118,8 +142,16 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 		parameters->SWANS_Max_Concurrent_Migrations,
 		parameters->SWANS_Migration_Working_Queue_Limit,
 		parameters->SWANS_Balance_Unit_Bytes,
-		raid_visible_lha_count);
+		raid_visible_lha_count, parameters->SWANS_Reserve_Zone_Enabled, per_ssd_lha_count);
 	Simulator->AddObject(raid_controller); // 시뮬레이터에 등록
+	raid_controller->Configure_zone_popularity(parameters->SWANS_Zone_Popularity_Mode,
+		parameters->SWANS_Zone_Popularity_Period);
+	RAID_Policy::MigrationLimits limits;
+	limits.Slice_time = parameters->SWANS_Migration_Slice_Time;
+	limits.Slice_sectors = parameters->SWANS_Migration_Slice_Sectors;
+	limits.Pause_duration = parameters->SWANS_Migration_Pause_Duration;
+	limits.Pause_on_read = parameters->SWANS_Migration_Pause_On_Read;
+	raid_controller->Configure_migration_limits(limits);
 
 	switch (parameters->HostInterface_Type) {
 		case HostInterface_Types::NVME:
@@ -142,6 +174,10 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 	}
 	raid_controller->Set_host_interface(Host_interface);
 	raid_controller->Set_backend_ssds(ssds);
+	raid_controller->Configure_wear_policy(parameters->SWANS_Wear_Metric, parameters->SWANS_Migration_Trigger,
+		parameters->SWANS_Zone_Selection, parameters->SWANS_TEC_TH_Precautionary_PctPoint,
+		parameters->SWANS_TEC_TH_Critical_PctPoint);
+	logical_blocks_per_ssd = static_cast<double>(per_ssd_lha_count) / (page_lba_count * parameters->Flash_Parameters.Page_No_Per_Block);
 	for (unsigned int ssd_idx = 0; ssd_idx < ssds.size(); ssd_idx++) {
 		SSD_Device* ssd = ssds[ssd_idx];
 		ssd->Cache_manager->Connect_to_user_request_serviced_signal([this](SSD_Components::User_Request* sub_request) {
@@ -181,6 +217,38 @@ void RAID_Device::Attach_to_host(Host_Components::PCIe_Switch* pcie_switch)
 
 void RAID_Device::Perform_preconditioning(std::vector<Utils::Workload_Statistics*> workload_stats)
 {
+	if (ssd_configs.front().SWANS_Reserve_Zone_Enabled) {
+		// The host statistics describe the array namespace. Each FTL needs the
+		// corresponding local namespace, not the entire array's LBA range.
+		const LHA_type backend = Utils::Logical_Address_Partitioning_Unit::Get_total_device_lha_count();
+		const LHA_type visible = Host_interface->Get_max_logical_sector_address() / ssd_count;
+		for (unsigned int disk = 0; disk < ssds.size(); ++disk) {
+			std::vector<Utils::Workload_Statistics> local;
+			for (auto original : workload_stats) {
+				if (original->Type != Utils::Workload_Type::SYNTHETIC)
+					throw std::invalid_argument("Reserve preconditioning requires a synthetic workload; trace preconditioning is unsupported by this FTL");
+				local.push_back(*original);
+				auto& stat = local.back();
+				auto prefix = [&](LHA_type end) {
+					const uint64_t row = static_cast<uint64_t>(stripe_unit_lba) * ssd_count;
+					const LHA_type remainder = end % row;
+					const LHA_type offset = static_cast<LHA_type>(disk) * stripe_unit_lba;
+					return end / row * stripe_unit_lba + (remainder > offset ? std::min<LHA_type>(stripe_unit_lba, remainder - offset) : 0);
+				};
+				stat.Min_LHA = prefix(original->Min_LHA);
+				const LHA_type local_end = std::min(visible, prefix(original->Max_LHA + 1));
+				if (local_end <= stat.Min_LHA) { local.pop_back(); continue; }
+				stat.Max_LHA = local_end - 1;
+				stat.Initial_occupancy_ratio *= static_cast<double>(visible) / backend;
+			}
+			std::vector<Utils::Workload_Statistics*> pointers;
+			for (auto& stat : local) pointers.push_back(&stat);
+			if (!pointers.empty()) ssds[disk]->Perform_preconditioning(pointers);
+		}
+		if (ssd_configs.front().Enabled_Preconditioning)
+			raid_controller->Register_preconditioned_data(ssd_configs.front().Flash_Parameters.Page_Capacity / SECTOR_SIZE_IN_BYTE);
+		return;
+	}
 	for (auto &ssd : ssds) {
 		ssd->Perform_preconditioning(workload_stats);  // 각 SSD에 대해 워밍업 수행
 	}
@@ -233,14 +301,15 @@ void RAID_Device::Initialize_io_streams(const std::vector<Host_Components::IO_Fl
 
 void RAID_Device::Start_simulation()
 {
-	if (telemetry_enabled && telemetry_period > 0) {
+	{
 		Simulator->Set_time_advance_observer([this](sim_time_type next_event) {
 			// A boundary is sampled after all events at that time, before advancing.
-			while (next_telemetry_time < next_event && !eol_captured) {
+			while (telemetry_enabled && telemetry_period > 0 && next_telemetry_time < next_event && !eol_captured) {
 				Emit_snapshot("periodic", 0, Capture_snapshot(next_telemetry_time, false));
 				if (next_telemetry_time > std::numeric_limits<sim_time_type>::max() - telemetry_period) break;
 				next_telemetry_time += telemetry_period;
 			}
+			raid_controller->Advance_zone_popularity(next_event);
 		});
 	}
 }

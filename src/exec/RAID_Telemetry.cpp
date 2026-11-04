@@ -24,7 +24,7 @@ void RAID_Device::Configure_telemetry_output(const std::string& prefix)
     telemetry_path = prefix + ".telemetry.csv";
     telemetry.open(telemetry_path, std::ios::out | std::ios::trunc);
     if (!telemetry) throw std::runtime_error("Cannot open telemetry output: " + telemetry_path);
-    telemetry << "sample,event,time_ns,migration_sequence,state,mu_write_units,completed_host_requests,completed_host_write_requests,completed_host_write_bytes,queue_requests,queue_request_bytes,copy_buffer_logical_bytes,blocked_requests,migrations,redirects,ssd_id,host_bytes_attributed,completed_nand_page_programs,completed_nand_block_erases,bad_blocks,completed_nand_programmed_bytes\n";
+    telemetry << "sample,event,time_ns,migration_sequence,state,mu,completed_host_requests,completed_host_write_requests,completed_host_write_bytes,queue_requests,queue_request_bytes,copy_buffer_logical_bytes,blocked_requests,migrations,redirects,ssd_id,host_bytes_attributed,completed_nand_page_programs,completed_nand_block_erases,bad_blocks,completed_nand_programmed_bytes,tec_valid,tec,erase_limit,wear_percent,user_block_boundary,remaining_op_ratio,mu_unit\n";
     telemetry << std::setprecision(17);
 }
 
@@ -39,6 +39,8 @@ RAID_Device::Snapshot RAID_Device::Capture_snapshot(sim_time_type time, bool det
         auto ftl = static_cast<SSD_Components::FTL*>(ssd->Firmware);
         const auto& cfg = ssd_configs[i].Flash_Parameters;
         o.Bad_blocks = ftl->BlockManager->Get_bad_block_count();
+        o.Wear = ftl->BlockManager->Get_wear_snapshot();
+        o.Remaining_op_ratio = ftl->BlockManager->Get_current_op_ratio();
         o.Host_bytes = raid_controller->Get_ssd_attributed_host_write_sectors(i) * SECTOR_SIZE_IN_BYTE;
         std::vector<double> programs, erases;
         for (unsigned int ch = 0; ch < ssd->Channel_count; ++ch) {
@@ -77,7 +79,10 @@ void RAID_Device::Emit_snapshot(const std::string& event, uint64_t migration, co
             << ',' << s.Host.Completed_requests << ',' << s.Host.Completed_write_requests << ',' << s.Host.Completed_write_bytes
             << ',' << s.Host.Queue_depth << ',' << s.Host.Queue_bytes << ',' << s.Host.Copy_buffer_bytes << ',' << s.Host.Blocked_requests
             << ',' << s.Host.Migrations << ',' << s.Host.Redirects << ',' << i << ',' << o.Host_bytes << ',' << o.Programs << ',' << o.Erases
-            << ',' << o.Bad_blocks << ',' << o.Programmed_bytes << '\n';
+            << ',' << o.Bad_blocks << ',' << o.Programmed_bytes
+            << ',' << o.Wear.Valid << ',' << o.Wear.Tail_erase_count << ',' << o.Wear.Erase_limit
+            << ',' << o.Wear.Wear_percent << ',' << o.Wear.User_blocks << ',' << o.Remaining_op_ratio
+            << ',' << (ssd_configs[0].SWANS_Wear_Metric == "TEC" ? "percent_points" : "write_units") << '\n';
     }
     telemetry.flush();
 }
@@ -86,12 +91,17 @@ void RAID_Device::Write_snapshot_XML(const std::string& tag, const Snapshot& s, 
 {
     w.Write_open_tag(tag);
     w.Write_attribute_string("Time_ns", std::to_string(s.Time));
+    w.Write_attribute_string("End_of_Life_Mode", ssd_configs[0].End_of_Life_Mode);
+    w.Write_attribute_string("End_of_Life_Threshold_Unit", ssd_configs[0].End_of_Life_Mode == "TEC" ? "percent" : "remaining_op_ratio");
+    w.Write_attribute_string("End_of_Life_Active_Threshold", std::to_string(ssd_configs[0].End_of_Life_Mode == "TEC"
+        ? ssd_configs[0].End_of_Life_TEC_Threshold_Percent : ssd_configs[0].End_of_Life_Threshold));
     w.Write_attribute_string("Completed_Host_Requests", std::to_string(s.Host.Completed_requests));
     w.Write_attribute_string("Completed_Host_Write_Requests", std::to_string(s.Host.Completed_write_requests));
     w.Write_attribute_string("Completed_Host_Write_Bytes", std::to_string(s.Host.Completed_write_bytes));
     w.Write_attribute_string("Balance_Unit_Bytes", std::to_string(ssd_configs[0].SWANS_Balance_Unit_Bytes));
     w.Write_attribute_string("Completed_Host_Write_Units", std::to_string(static_cast<double>(s.Host.Completed_write_bytes) / ssd_configs[0].SWANS_Balance_Unit_Bytes));
-    w.Write_attribute_string("Mu_Write_Units", std::to_string(s.Host.Mu));
+    w.Write_attribute_string("Mu", std::to_string(s.Host.Mu));
+    w.Write_attribute_string("Mu_Unit", ssd_configs[0].SWANS_Wear_Metric == "TEC" ? "percent_points" : "write_units");
     w.Write_attribute_string("Queue_Requests", std::to_string(s.Host.Queue_depth));
     w.Write_attribute_string("Queue_Request_Bytes", std::to_string(s.Host.Queue_bytes));
     w.Write_attribute_string("Copy_Buffer_Logical_Bytes", std::to_string(s.Host.Copy_buffer_bytes));
@@ -110,6 +120,15 @@ void RAID_Device::Write_snapshot_XML(const std::string& tag, const Snapshot& s, 
         w.Write_attribute_string("Completed_NAND_Programmed_Bytes", std::to_string(o.Programmed_bytes));
         w.Write_attribute_string("Logical_Host_Bytes_Attributed", std::to_string(o.Host_bytes));
         w.Write_attribute_string("Bad_Block_Count", std::to_string(o.Bad_blocks));
+        w.Write_attribute_string("TEC_Valid", o.Wear.Valid ? "true" : "false");
+        w.Write_attribute_string("TEC_Error", o.Wear.Error);
+        w.Write_attribute_string("TEC", std::to_string(o.Wear.Tail_erase_count));
+        w.Write_attribute_string("Erase_Limit", std::to_string(o.Wear.Erase_limit));
+        w.Write_attribute_string("Wear_Percent", std::to_string(o.Wear.Wear_percent));
+        w.Write_attribute_string("TEC_User_Block_Boundary", std::to_string(o.Wear.User_blocks));
+        w.Write_attribute_string("Logical_Capacity_In_Blocks", std::to_string(logical_blocks_per_ssd));
+        w.Write_attribute_string("TEC_Boundary_Minus_Logical_Blocks", std::to_string(o.Wear.User_blocks - logical_blocks_per_ssd));
+        w.Write_attribute_string("Remaining_OP_Ratio", std::to_string(o.Remaining_op_ratio));
         w.Write_attribute_string("All_Blocks_Lifetime_Page_Program_Population_SD", std::to_string(o.Block_program_SD));
         w.Write_attribute_string("All_Blocks_Erase_Count_Population_SD", std::to_string(o.Block_erase_SD));
         w.Write_close_tag();

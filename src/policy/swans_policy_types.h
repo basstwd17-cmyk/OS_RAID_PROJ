@@ -25,6 +25,7 @@ struct RedirectOp
 
 struct MigrationOp
 {
+	uint64_t Reserve_zone = INVALID_ZONE_ID; // cold -> old reserve, then hot -> freed cold
 	uint64_t Hot_zone = INVALID_ZONE_ID; // hot 영역의 zone ID
 	uint64_t Cold_zone = INVALID_ZONE_ID; // cold 영역의 zone ID
 	unsigned int Hot_ssd = 0; // hot 영역이 있는 SSD의 ID
@@ -35,6 +36,10 @@ struct PolicyDecision	//policy가 컨트롤러에 한 epoch마다 전달하는 �
 {
 	PolicyState State = PolicyState::NORMAL;
 	double Mu = 0.0; // cumulative RAID-controller write-subrequest imbalance
+	bool Wear_valid = false;
+	double Wear_average = 0.0;
+	double Wear_threshold = 0.0;
+	std::vector<double> Wear_values; // last policy evaluation, lifetime-consumed fractions
 	RedirectOp Redirect;
 	std::vector<MigrationOp> Migrations; // 수행할 마이그레이션 연산 목록
 };
@@ -54,6 +59,14 @@ struct MigrationTask
 {
 	MigrationOp Op;
 	std::vector<StripeCopyPlan> Copies;
+	std::vector<StripeCopyPlan> Cold_copies; // first stage of a reserve-assisted exchange
+};
+
+struct MigrationLimits {
+	sim_time_type Slice_time = 0; // ns; 0 disables
+	uint64_t Slice_sectors = 0; // completed destination sectors per slice; 0 disables
+	sim_time_type Pause_duration = 1000000;
+	bool Pause_on_read = false; // unrelated reads only; reads of locked zones must await completion
 };
 
 struct MigrationBuffer

@@ -51,7 +51,10 @@ Host_System::Host_System(Host_Parameter_Set* parameters, bool preconditioning_re
 
 		LHA_type flow_start_lha = Utils::Logical_Address_Partitioning_Unit::Start_lha_available_to_flow(flow_id);
 		LHA_type flow_end_lha = Utils::Logical_Address_Partitioning_Unit::End_lha_available_to_flow(flow_id);
-		if (flow_lha_scale > 1) {
+		if (parameters->IO_Flow_Definitions.size() == 1 && host_visible_lha_count > 0) {
+			flow_start_lha = 0;
+			flow_end_lha = host_visible_lha_count - 1;
+		} else if (flow_lha_scale > 1) {
 			flow_start_lha *= flow_lha_scale;
 			flow_end_lha = (flow_end_lha + 1) * flow_lha_scale - 1;
 		}
@@ -77,13 +80,14 @@ Host_System::Host_System(Host_Parameter_Set* parameters, bool preconditioning_re
 			}
 			case Flow_Type::TRACE: {
 				IO_Flow_Parameter_Set_Trace_Based * flow_param = (IO_Flow_Parameter_Set_Trace_Based*)parameters->IO_Flow_Definitions[flow_id];
-				io_flow = new Host_Components::IO_Flow_Trace_Based(this->ID() + ".IO_Flow.Trace." + flow_param->File_Path, flow_id,
+				io_flow = new Host_Components::IO_Flow_Trace_Based(this->ID() + ".IO_Flow.Trace." + std::to_string(flow_id) + "." + flow_param->File_Path, flow_id,
 					flow_start_lha, flow_end_lha,
 					FLOW_ID_TO_Q_ID(flow_id), nvme_sq_size, nvme_cq_size,
 					flow_param->Priority_Class, flow_param->Initial_Occupancy_Percentage / double(100.0),
 					flow_param->File_Path, flow_param->Time_Unit, flow_param->Relay_Count, flow_param->Percentage_To_Be_Executed,
 					ssd_host_interface->GetType(), this->PCIe_root_complex, this->SATA_hba,
-					parameters->Enable_ResponseTime_Logging, parameters->ResponseTime_Logging_Period_Length, parameters->Input_file_path + ".IO_Flow.No_" + std::to_string(flow_id) + ".log");
+					parameters->Enable_ResponseTime_Logging, parameters->ResponseTime_Logging_Period_Length, parameters->Input_file_path + ".IO_Flow.No_" + std::to_string(flow_id) + ".log",
+					flow_param->Trace_Directory, flow_param->Trace_Extension, flow_param->Trace_Selection_Seed, flow_param->Trace_Inter_File_Gap_NS);
 
 				this->IO_flows.push_back(io_flow);
 				break;

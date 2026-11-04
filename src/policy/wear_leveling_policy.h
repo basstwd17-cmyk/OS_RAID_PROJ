@@ -4,6 +4,7 @@
 #include <vector>
 #include "swans_policy_types.h"
 #include "zone_directory.h"
+#include "wear_metric.h"
 
 namespace RAID_Policy {
 
@@ -22,8 +23,15 @@ public:
 	// Records a destination-LBA migration write only after its background request
 	// completes. Historical writes are never reassigned between SSDs.
 	void Observe_completed_migration_write(unsigned int ssd_id, uint64_t write_bytes);
-	PolicyDecision Evaluate(const ZoneDirectory& directory);
+	PolicyDecision Evaluate(const ZoneDirectory& directory, const WearSnapshot& wear);
 	bool Has_epoch_writes() const;
+	void Configure_metric(const std::string& metric, const std::string& trigger,
+		const std::string& selection, double precautionary, double critical);
+	void Update_wear(const WearSnapshot& wear);
+	const std::string& Metric() const { return metric; }
+	const std::string& Trigger() const { return trigger; }
+	const std::string& Selection() const { return selection; }
+	const char* Mu_unit() const { return metric == "TEC" ? "percent_points" : "write_units"; }
 
 	double Last_mu() const { return last_mu; }
 	double Current_mu() const { return Compute_stddev(); }
@@ -46,6 +54,9 @@ private:
 	double Compute_stddev() const;
 	void Reset_epoch();
 
+	std::string metric = "BAD_BLOCK_COUNT", trigger = "DYNAMIC_WEAR", selection = "SSD_POPULARITY";
+	WearSnapshot live_wear;
+	double Metric_value(unsigned int i) const;
 	bool initialized;
 	unsigned int ssd_count;
 	double th_precautionary_write_units;

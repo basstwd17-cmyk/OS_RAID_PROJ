@@ -39,7 +39,14 @@ public:
 	explicit MigrationExecutor(unsigned int buffer_limit_per_task);
 
 	void Configure(unsigned int buffer_limit_per_task);
-	void Start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory);
+	void Configure_limits(const MigrationLimits& limits);
+	const MigrationLimits& Limits() const { return limits; }
+	void Start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory, sim_time_type now = 0);
+	sim_time_type Next_wakeup(sim_time_type fallback) const;
+	uint64_t Time_pauses() const { return time_pauses; }
+	uint64_t Sector_pauses() const { return sector_pauses; }
+	uint64_t Read_pauses() const { return read_pauses; }
+	uint64_t Cold_stages_completed() const { return cold_stages_completed; }
 	bool Has_inflight() const { return !inflight.empty(); }
 	// A migration copy is issued one at a time per task.  The controller uses
 	// this to wait for the completion callback instead of continuously polling
@@ -58,7 +65,7 @@ public:
 	bool Notify_request_completed(io_request_id_type request_id, ZoneDirectory& directory);
 	void Poll(ZoneDirectory& directory,
 		const SubmitCopyFunction& submit_copy,
-		const DiscardFunction& discard_source);
+		const DiscardFunction& discard_source, sim_time_type now = 0);
 
 	std::vector<DeferredRequest> Drain_replay_requests();
 	uint64_t Buffered_count() const;
@@ -95,6 +102,14 @@ private:
 	};
 
 	struct InflightTask {
+		MigrationOp Original_op;
+		std::vector<StripeCopyPlan> Hot_copies;
+		std::vector<uint64_t> Locked_zones;
+		bool Cold_stage = false;
+		sim_time_type Slice_start = 0, Resume_at = 0;
+		uint64_t Slice_sectors = 0;
+		bool Issued_in_slice = false, Read_pause_pending = false;
+		unsigned int Active_sectors = 0;
 		MigrationTask Task;	// hot/cold 쌍 + 복사할 stripe 목록
 		MigrationBuffer Buffer;
 		std::vector<StripeCopyPlan> Restore_copies;
@@ -122,7 +137,11 @@ private:
 		const DiscardFunction& discard_source, uint64_t task_index);
 	void Drain_pending_source_discards(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index);
 	void Discard_source_copies(InflightTask& task, const DiscardFunction& discard_source, uint64_t task_index);
-	void Drain_task(InflightTask& task, ZoneDirectory& directory);
+	bool Drain_task(InflightTask& task, ZoneDirectory& directory);
+	void Initialize_stage(InflightTask& task, ZoneDirectory& directory);
+	bool Pause_before_copy(InflightTask& task, sim_time_type now);
+	MigrationLimits limits;
+	uint64_t time_pauses = 0, sector_pauses = 0, read_pauses = 0, cold_stages_completed = 0;
 
 	unsigned int buffer_limit_per_task;	// task 하나당 연기된 요청 최대치
 	uint64_t backpressure_events;	// 버퍼한계 초과 카운터

@@ -1,6 +1,7 @@
 CC        := g++
+.DEFAULT_GOAL := all
 LD        := g++
-CC_FLAGS := -std=c++11 -O3 -g
+CC_FLAGS := -std=c++11 -O3 -g -MMD -MP
 
 MODULES   := exec host nvm_chip nvm_chip/flash_memory policy sim ssd utils
 SRC_DIR   := $(addprefix src/,$(MODULES)) src
@@ -10,6 +11,8 @@ SRC       := $(foreach sdir,$(SRC_DIR),$(wildcard $(sdir)/*.cpp))
 SRC       := src/main.cpp $(SRC)
 OBJ       := $(patsubst src/%.cpp,build/%.o,$(SRC))
 INCLUDES  := $(addprefix -I,$(SRC_DIR))
+
+-include $(OBJ:.o=.d)
 
 vpath %.cpp $(SRC_DIR)
 

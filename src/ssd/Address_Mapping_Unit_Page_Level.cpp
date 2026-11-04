@@ -2,6 +2,7 @@
 #include <cmath>
 #include <assert.h>
 #include <stdexcept>
+#include <limits>
 
 #include "Address_Mapping_Unit_Page_Level.h"
 #include "Stats.h"
@@ -845,6 +846,25 @@ namespace SSD_Components
 				domains[stream_id]->CMT->Insert_new_mapping_info(stream_id, transaction->LPA, transaction->PPA, transaction->write_sectors_bitmap);
 				}
 			}
+		}
+
+		bool Address_Mapping_Unit_Page_Level::Is_discard_complete(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count)
+		{
+			if (!lha_count || !sector_no_per_page || stream_id >= no_of_input_streams
+				|| start_lha > std::numeric_limits<LHA_type>::max() - (lha_count - 1)) return false;
+			auto domain = domains[stream_id];
+			const LHA_type end = start_lha + lha_count - 1;
+			if (!domain || end / sector_no_per_page >= domain->Total_logical_pages_no) return false;
+			for (LPA_type lpa = start_lha / sector_no_per_page; lpa <= end / sector_no_per_page; ++lpa) {
+				if (is_lpa_locked_for_gc(stream_id, lpa) || domain->Pending_discard_masks.count(lpa)) return false;
+				PPA_type ppa; page_status_type state;
+				Get_data_mapping_info_for_gc(stream_id, lpa, ppa, state);
+				const LHA_type first = std::max(start_lha, lpa * sector_no_per_page);
+				const LHA_type last = std::min(end, (lpa + 1) * sector_no_per_page - 1);
+				const auto mask = make_sector_mask(first - lpa * sector_no_per_page, last - first + 1, sector_no_per_page);
+				if (ppa != NO_PPA && (state & mask)) return false;
+			}
+			return true;
 		}
 
 		void Address_Mapping_Unit_Page_Level::Discard_logical_range(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count)
