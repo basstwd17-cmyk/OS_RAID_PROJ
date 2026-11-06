@@ -61,6 +61,8 @@ namespace SSD_Components
 		Block_Pool_Slot_Type** Translation_wf; //The write frontier blocks for translation GC pages
 		std::queue<flash_block_ID_type> Block_usage_history;//A fifo queue that keeps track of flash blocks based on their usage history
 		std::set<flash_block_ID_type> Ongoing_erase_operations;
+		flash_block_ID_type Last_greedy_victim_block = 0;
+		bool Has_last_greedy_victim = false;
 		Block_Pool_Slot_Type* Get_a_free_block(stream_id_type stream_id, bool for_mapping_data);
 		unsigned int Get_free_block_pool_size();
 		void Check_bookkeeping_correctness(const NVM::FlashMemory::Physical_Page_Address& plane_address);

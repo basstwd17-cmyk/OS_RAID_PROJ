@@ -60,7 +60,12 @@ namespace SSD_Components
 				case SSD_Components::GC_Block_Selection_Policy_Type::GREEDY://Find the set of blocks with maximum number of invalid pages and no free pages
 				{
 					gc_candidate_block_id = block_no_per_plane;
-					for (flash_block_ID_type block_id = 0; block_id < block_no_per_plane; block_id++) {
+					flash_block_ID_type block_id = 0;
+					if (pbke->Has_last_greedy_victim && pbke->Last_greedy_victim_block + 1 < block_no_per_plane) {
+						block_id = pbke->Last_greedy_victim_block + 1;
+					}
+					for (unsigned int scanned = 0; scanned < block_no_per_plane; ++scanned,
+						block_id = block_id + 1 == block_no_per_plane ? 0 : block_id + 1) {
 						if (!eligible(block_id, true, 1)) {
 							continue;
 						}
@@ -193,6 +198,11 @@ namespace SSD_Components
 			block_manager->GC_WL_started(gc_candidate_address);
 			pbke->Ongoing_erase_operations.insert(gc_candidate_block_id);
 			address_mapping_unit->Set_barrier_for_accessing_physical_block(gc_candidate_address);//Lock the block, so no user request can intervene while the GC is progressing
+			if (block_selection_policy == GC_Block_Selection_Policy_Type::GREEDY) {
+				// The victim is admitted even if NAND submission must wait for a user read.
+				pbke->Last_greedy_victim_block = gc_candidate_block_id;
+				pbke->Has_last_greedy_victim = true;
+			}
 			
 			//If there are ongoing requests targeting the candidate block, the gc execution should be postponed
 			if (block_manager->Can_execute_gc_wl(gc_candidate_address)) {

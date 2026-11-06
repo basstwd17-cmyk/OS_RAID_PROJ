@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "IO_Flow_Trace_Based.h"
 #include "../utils/StringTools.h"
 #include "ASCII_Trace_Definition.h"
@@ -257,6 +258,17 @@ void IO_Flow_Trace_Based::Execute_simulator_event(MQSimEngine::Sim_Event *)
 		if (end_LBA > end_lsa_on_device)
 		{
 			end_LBA = start_lsa_on_device + (end_LBA - end_lsa_on_device) - 1;
+		}
+
+		// If the loop reaches the device end, it wraps before it can exceed end_LBA.
+		if (start_LBA <= end_LBA && end_LBA >= end_lsa_on_device)
+		{
+			std::cerr << "ERROR: Trace statistics would loop indefinitely after LBA wrap"
+				<< " in " << trace_file_path
+				<< " (start LBA=" << start_LBA << ", adjusted end LBA=" << end_LBA
+				<< ", device LBA range=[" << start_lsa_on_device << ", " << end_lsa_on_device
+				<< "], request size=" << LBA_count << " sectors)" << std::endl;
+			std::exit(EXIT_FAILURE);
 		}
 
 		//Address access pattern statistics
