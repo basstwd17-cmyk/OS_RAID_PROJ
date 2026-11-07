@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<SWANS_Parameter_Set>
+  <SWANS_Enabled>true</SWANS_Enabled>
+  <op_zone_migration>true</op_zone_migration>
+  <SWANS_Zone_Size_LBA>0</SWANS_Zone_Size_LBA>
+  <SWANS_Wear_Metric>BAD_BLOCK_COUNT</SWANS_Wear_Metric>
+  <SWANS_Migration_Trigger>DYNAMIC_WEAR</SWANS_Migration_Trigger>
+  <SWANS_Zone_Popularity_Mode>HALF_DECAY</SWANS_Zone_Popularity_Mode>
+  <SWANS_Zone_Popularity_Period>40000000000</SWANS_Zone_Popularity_Period>
+  <SWANS_Epoch_Default>40000000000</SWANS_Epoch_Default>
+  <SWANS_Epoch_Placement>40000000000</SWANS_Epoch_Placement>
+  <SWANS_Epoch_Migration>40000000000</SWANS_Epoch_Migration>
+  <SWANS_TH_Precautionary>5</SWANS_TH_Precautionary>
+  <SWANS_Balance_Unit_Bytes>1048576</SWANS_Balance_Unit_Bytes>
+  <SWANS_Max_Concurrent_Migrations>1</SWANS_Max_Concurrent_Migrations>
+  <SWANS_Migration_Working_Queue_Limit>64</SWANS_Migration_Working_Queue_Limit>
+  <SWANS_Migration_Slice_Time>0</SWANS_Migration_Slice_Time>
+  <SWANS_Migration_Slice_Sectors>0</SWANS_Migration_Slice_Sectors>
+  <SWANS_Migration_Pause_Duration>1000000</SWANS_Migration_Pause_Duration>
+  <SWANS_Migration_Pause_On_Read>false</SWANS_Migration_Pause_On_Read>
+</SWANS_Parameter_Set>

@@ -3,6 +3,18 @@
 #include <set>
 #include <cstring>
 #include <algorithm>
+#include <limits>
+#include <stdexcept>
+
+namespace {
+uint64_t trace_integer(const std::string& value, uint64_t maximum) {
+	if (value.empty() || value.find_first_not_of("0123456789") != std::string::npos)
+		throw std::invalid_argument("Trace pool setting must be an unsigned decimal integer");
+	const auto result = std::stoull(value);
+	if (result > maximum) throw std::out_of_range("Trace pool setting is out of range");
+	return result;
+}
+}
 
 //All serialization and deserialization functions should be replaced by a C++ reflection implementation
 void IO_Flow_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
@@ -408,6 +420,10 @@ void IO_Flow_Parameter_Set_Trace_Based::XML_serialize(Utils::XmlWriter& xmlwrite
 	xmlwriter.Write_open_tag(tmp);
 	IO_Flow_Parameter_Set::XML_serialize(xmlwriter);
 
+	xmlwriter.Write_attribute_string("Trace_Directory", Trace_Directory);
+	xmlwriter.Write_attribute_string("Trace_Extension", Trace_Extension);
+	xmlwriter.Write_attribute_string("Trace_Selection_Seed", std::to_string(Trace_Selection_Seed));
+	xmlwriter.Write_attribute_string("Trace_Inter_File_Gap_NS", std::to_string(Trace_Inter_File_Gap_NS));
 	std::string attr = "File_Path";
 	std::string val = File_Path;
 	xmlwriter.Write_attribute_string(attr, val);
@@ -452,6 +468,14 @@ void IO_Flow_Parameter_Set_Trace_Based::XML_deserialize(rapidxml::xml_node<> *no
 			} else if (strcmp(param->name(), "Percentage_To_Be_Executed") == 0) {
 				std::string val = param->value();
 				Percentage_To_Be_Executed = std::stoi(val);
+			} else if (strcmp(param->name(), "Trace_Directory") == 0) {
+				Trace_Directory = param->value();
+			} else if (strcmp(param->name(), "Trace_Extension") == 0) {
+				Trace_Extension = param->value();
+			} else if (strcmp(param->name(), "Trace_Selection_Seed") == 0) {
+				Trace_Selection_Seed = static_cast<unsigned int>(trace_integer(param->value(), std::numeric_limits<unsigned int>::max()));
+			} else if (strcmp(param->name(), "Trace_Inter_File_Gap_NS") == 0) {
+				Trace_Inter_File_Gap_NS = trace_integer(param->value(), std::numeric_limits<uint64_t>::max());
 			} else if (strcmp(param->name(), "File_Path") == 0) {
 				File_Path = param->value();
 			} else if (strcmp(param->name(), "Time_Unit") == 0) {

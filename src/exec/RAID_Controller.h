@@ -45,9 +45,18 @@ public:
 		unsigned int swans_max_concurrent_migrations,
 		unsigned int swans_migration_buffer_limit,
 		uint64_t swans_balance_unit_bytes,
-		LHA_type total_logical_lha_count);
+		LHA_type total_logical_lha_count, bool reserve_zone = false, LHA_type backend_lha_count = 0);
 
 	void Set_backend_ssds(const std::vector<SSD_Device*>& ssds);
+	void Register_preconditioned_data(unsigned int sectors_per_page);
+	void Configure_wear_policy(const std::string& metric, const std::string& trigger,
+		const std::string& selection, double precautionary, double critical);
+	void Advance_zone_popularity(sim_time_type now) { zone_directory.Advance_popularity(now); }
+	void Configure_zone_popularity(const std::string& mode, sim_time_type period);
+	void Configure_migration_limits(const RAID_Policy::MigrationLimits& limits) { migration_executor.Configure_limits(limits); }
+	// Replace only the provider to add a new lifetime estimator; trigger stays unchanged.
+	void Set_wear_metric_provider(const std::string& name,
+		std::function<RAID_Policy::WearSnapshot()> provider);
 	void Set_submit_callback(std::function<void(unsigned int, SSD_Components::User_Request*)> callback);
 	void Set_complete_callback(std::function<void(SSD_Components::User_Request*)> callback);
 
@@ -71,7 +80,7 @@ public:
 		double Mu;
 		std::string State;
 	};
-	Observation Get_observation() const;
+	Observation Get_observation();
 	std::function<void(const std::string&, uint64_t)> Observation_event;
 
 private:
@@ -175,12 +184,15 @@ private:
 
 	struct Swans_Migration_Record
 	{
+		double Source_wear = 0, Destination_wear = 0, Wear_average = 0, Wear_threshold = 0;
 		uint64_t Sequence = 0;
 		sim_time_type Start_time = 0;
 		sim_time_type End_time = 0;
 		std::string Status = "ACTIVE";
 		uint64_t Hot_zone = 0;
 		uint64_t Cold_zone = 0;
+		uint64_t Reserve_zone = RAID_Policy::INVALID_ZONE_ID;
+		uint64_t Cold_copy_sectors = 0;
 		unsigned int Hot_ssd = 0;
 		unsigned int Cold_ssd = 0;
 		unsigned int First_source_disk = 0;
@@ -217,11 +229,14 @@ private:
 	RAID_Policy::PolicyDecision swans_last_decision;
 	RAID_Policy::ZoneDirectory zone_directory;
 	RAID_Policy::WearLevelingPolicy wear_leveling_policy;
+	std::string wear_metric_name = "BAD_BLOCK_COUNT";
+	std::function<RAID_Policy::WearSnapshot()> wear_metric_provider;
 	RAID_Policy::MigrationExecutor migration_executor;
 	Swans_Stats swans_stats;
 	std::vector<Swans_Migration_Record> swans_migration_history;
 	std::deque<SSD_Components::User_Request*> blocked_user_requests;
 	uint64_t peak_blocked_requests = 0;
+	uint64_t preconditioned_valid_sectors = 0;
 
 	SSD_Components::User_Request* Create_sub_request(const SSD_Components::User_Request* original, const RAID_Sub_Request& part) const;
 	io_request_id_type Submit_background_copy(const RAID_Policy::StripeCopyPlan& copy, bool is_write, uint64_t task_index);

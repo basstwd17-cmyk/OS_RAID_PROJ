@@ -2,6 +2,7 @@
 #define BLOCK_POOL_MANAGER_BASE_H
 
 #include <list>
+#include "TEC_Wear.h"
 #include <cstdint>
 #include <queue>
 #include <set>
@@ -113,10 +114,19 @@ namespace SSD_Components
 		bool Is_having_ongoing_program(const NVM::FlashMemory::Physical_Page_Address& block_address);//Cheks if block has any ongoing program request
 		bool Is_page_valid(Block_Pool_Slot_Type* block, flash_page_ID_type page_id);//Make the page invalid in the block bookkeeping record
 		uint64_t Get_total_block_count() const { return total_block_count; }
+		const TECWearSnapshot& Get_wear_snapshot() const;
+		// Also call after any future initial-wear injection.
+		void Invalidate_wear_snapshot() { tec_dirty = true; }
+		void Configure_end_of_life(const std::string& mode, double tec_threshold_percent);
 		uint64_t Get_bad_block_count() const { return bad_block_count; }
+		uint64_t Get_initial_op_block_budget() const { return original_op_block_budget; }
+		double Get_end_of_life_threshold() const { return end_of_life_threshold; }
+		bool Is_bad_block_retirement_enabled() const { return bad_block_retirement_enabled; }
 		uint64_t Get_remaining_usable_block_count() const;
 		double Get_current_op_ratio() const;
 	protected:
+		mutable bool tec_dirty = true;
+		mutable TECWearSnapshot tec_snapshot;
 		PlaneBookKeepingType ****plane_manager;//Keeps track of plane block usage information
 		GC_and_WL_Unit_Base *gc_and_wl_unit;
 		unsigned int max_allowed_block_erase_count;
@@ -130,6 +140,8 @@ namespace SSD_Components
 		std::string device_id;
 		double overprovisioning_ratio;
 		double end_of_life_threshold;
+		std::string end_of_life_mode = "OP_RATIO";
+		double end_of_life_tec_threshold_percent = 100.0;
 		bool bad_block_retirement_enabled;
 		bool eol_reached;
 		uint64_t total_block_count;

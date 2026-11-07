@@ -32,6 +32,8 @@
 		<Overprovisioning_Ratio>0.20</Overprovisioning_Ratio>
 		<Bad_Block_Retirement_Enabled>true</Bad_Block_Retirement_Enabled>
 		<End_of_Life_Threshold>0.05</End_of_Life_Threshold>
+		<End_of_Life_Mode>OP_RATIO</End_of_Life_Mode>
+		<End_of_Life_TEC_Threshold_Percent>100</End_of_Life_TEC_Threshold_Percent>
 		<GC_Exec_Threshold>0.10000</GC_Exec_Threshold>
 		<GC_Block_Selection_Policy>GREEDY</GC_Block_Selection_Policy>
 		<Use_Copyback_for_GC>false</Use_Copyback_for_GC>
@@ -60,6 +62,11 @@
 		<SWANS_Epoch_Placement>80000000000</SWANS_Epoch_Placement>
 		<SWANS_Epoch_Migration>120000000000</SWANS_Epoch_Migration>
 		<SWANS_TH_Precautionary>8</SWANS_TH_Precautionary>
+		<SWANS_Wear_Metric>BAD_BLOCK_COUNT</SWANS_Wear_Metric>
+  <SWANS_Migration_Trigger>DYNAMIC_WEAR</SWANS_Migration_Trigger>
+		<SWANS_Zone_Popularity_Mode>HALF_DECAY</SWANS_Zone_Popularity_Mode>
+		<SWANS_Zone_Popularity_Period>40000000000</SWANS_Zone_Popularity_Period>
+		<!-- Legacy compatibility setting; migration now uses (Wear_avg + 1) / 2 < Wear_i. -->
 		<SWANS_TH_Critical>32</SWANS_TH_Critical>
 		<SWANS_Balance_Unit_Bytes>1048576</SWANS_Balance_Unit_Bytes>
 		<SWANS_Max_Concurrent_Migrations>1</SWANS_Max_Concurrent_Migrations>

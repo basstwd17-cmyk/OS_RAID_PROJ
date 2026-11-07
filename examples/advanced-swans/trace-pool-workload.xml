@@ -1,0 +1,21 @@
+<MQSim_IO_Scenarios>
+  <IO_Scenario>
+    <IO_Flow_Parameter_Set_Trace_Based>
+      <Priority_Class>HIGH</Priority_Class>
+      <Device_Level_Data_Caching_Mode>TURNED_OFF</Device_Level_Data_Caching_Mode>
+      <Channel_IDs>0</Channel_IDs>
+      <Chip_IDs>0</Chip_IDs>
+      <Die_IDs>0</Die_IDs>
+      <Plane_IDs>0</Plane_IDs>
+      <Initial_Occupancy_Percentage>0</Initial_Occupancy_Percentage>
+      <File_Path></File_Path>
+      <Trace_Directory>D:/path/to/trace-folder</Trace_Directory>
+      <Trace_Extension>.trace</Trace_Extension>
+      <Trace_Selection_Seed>42</Trace_Selection_Seed>
+      <Trace_Inter_File_Gap_NS>1</Trace_Inter_File_Gap_NS>
+      <Relay_Count>0</Relay_Count>
+      <Percentage_To_Be_Executed>100</Percentage_To_Be_Executed>
+      <Time_Unit>NANOSECOND</Time_Unit>
+    </IO_Flow_Parameter_Set_Trace_Based>
+  </IO_Scenario>
+</MQSim_IO_Scenarios>

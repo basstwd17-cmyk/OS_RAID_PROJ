@@ -5,6 +5,8 @@
 #include <cstring>
 #include "ssd/SSD_Defs.h"
 #include "exec/Execution_Parameter_Set.h"
+#include "exec/SWANS_Parameter_Set.h"
+#include <stdexcept>
 #include "exec/RAID_Device.h"
 #include "exec/Storage_Device.h"
 #include "exec/Host_System.h"
@@ -14,26 +16,17 @@
 using namespace std;
 
 
-void command_line_args(char* argv[], string& input_file_path, string& workload_file_path)
+void command_line_args(int argc, char* argv[], string& input_file_path, string& workload_file_path, string& swans_file_path)
 {
-// argv 배열을 돌면서, -i(SSD 설정 파일) 또는 -w(워크로드 파일) 옵션을 찾아서 파일 경로를 저장
-	for (int arg_cntr = 1; arg_cntr < 5; arg_cntr++) {
-		string arg = argv[arg_cntr];
-
-		char file_path_switch[] = "-i"; // -i 옵션
-		if (arg.compare(0, strlen(file_path_switch), file_path_switch) == 0) {
-			input_file_path.assign(argv[++arg_cntr]);
-			//cout << input_file_path << endl;
-			continue;
-		}
-
-		char workload_path_switch[] = "-w";
-		if (arg.compare(0, strlen(workload_path_switch), workload_path_switch) == 0) {
-			workload_file_path.assign(argv[++arg_cntr]);
-			//cout << workload_file_path << endl;
-			continue;
-		}
+	for (int i = 1; i < argc; i += 2) {
+		string option = argv[i];
+		string* target = option == "-i" ? &input_file_path : option == "-w" ? &workload_file_path
+			: option == "-s" ? &swans_file_path : nullptr;
+		if (!target || !target->empty() || i + 1 >= argc || argv[i + 1][0] == '-')
+			throw std::invalid_argument("Unknown, duplicate or incomplete option: " + option);
+		*target = argv[i + 1];
 	}
+	if (input_file_path.empty() || workload_file_path.empty()) throw std::invalid_argument("Both -i and -w are required");
 }
 
 // SSD 설정 파일 읽기
@@ -257,22 +250,18 @@ void print_help()
 {
 	cout << "MQSim - SSD simulator with both NVMe and SATA host interface behavior, see ReadMe.md for details" << endl <<
 		"Standalone Usage:" << endl <<
-		"./MQSim [-i path/to/config/file] [-w path/to/workload/file]" << endl;
+		"./MQSim -i ssdconfig.xml -w workload.xml [-s swansconfig.xml]" << endl;
 }
 
 int main(int argc, char* argv[])
 {
-	string ssd_config_file_path, workload_defs_file_path;
-	if (argc != 5) {
-		// MQSim expects 2 arguments: 1) the path to the SSD configuration definition file, and 2) the path to the workload definition file
-		print_help();
-		return 1;
-	}
-
-	command_line_args(argv, ssd_config_file_path, workload_defs_file_path);
+	try {
+	string ssd_config_file_path, workload_defs_file_path, swans_config_file_path;
+	command_line_args(argc, argv, ssd_config_file_path, workload_defs_file_path, swans_config_file_path);
 
 	Execution_Parameter_Set* exec_params = new Execution_Parameter_Set;
 	read_configuration_parameters(ssd_config_file_path, exec_params);
+	if (!swans_config_file_path.empty()) Read_swans_configuration(swans_config_file_path, exec_params->SSD_Device_Configuration);
 	std::vector<std::vector<IO_Flow_Parameter_Set*>*>* io_scenarios = read_workload_definitions(workload_defs_file_path);
 
 	int cntr = 1;
@@ -291,14 +280,19 @@ int main(int argc, char* argv[])
 			exec_params->Host_Configuration.IO_Flow_Definitions.push_back(*io_flow_def);
 		}
 		bool eol_replay_requested = false;
+		bool trace_pool_requested = false;
 		for (auto io_flow_def : exec_params->Host_Configuration.IO_Flow_Definitions) {
-			if (io_flow_def->Type == Flow_Type::TRACE
-				&& static_cast<IO_Flow_Parameter_Set_Trace_Based*>(io_flow_def)->Relay_Count == 0) {
-				eol_replay_requested = true;
-				break;
+			if (io_flow_def->Type == Flow_Type::TRACE) {
+				const auto trace = static_cast<IO_Flow_Parameter_Set_Trace_Based*>(io_flow_def);
+				eol_replay_requested |= trace->Relay_Count == 0;
+				trace_pool_requested |= !trace->Trace_Directory.empty();
 			}
 		}
-		if (eol_replay_requested && !exec_params->SSD_Device_Configuration.Bad_Block_Retirement_Enabled) {
+		if (trace_pool_requested && exec_params->SSD_Device_Configuration.Enabled_Preconditioning) {
+			throw std::invalid_argument("Trace_Directory requires Enabled_Preconditioning=false; trace-pool preconditioning is not supported");
+		}
+		if (eol_replay_requested && exec_params->SSD_Device_Configuration.End_of_Life_Mode == "OP_RATIO"
+			&& !exec_params->SSD_Device_Configuration.Bad_Block_Retirement_Enabled) {
 			PRINT_ERROR("Relay_Count=0 requires Bad_Block_Retirement_Enabled=true; otherwise EOL cannot be reached")
 		}
 		
@@ -334,4 +328,9 @@ int main(int argc, char* argv[])
 	cin.get(); // Disable if you prefer batch runs
 
 	return 0;
+	} catch (const std::exception& e) {
+		std::cerr << "Configuration/simulation error: " << e.what() << std::endl;
+		print_help();
+		return 1;
+	}
 }

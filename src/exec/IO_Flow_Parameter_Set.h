@@ -63,6 +63,9 @@ public:
 		this->Type = Flow_Type::TRACE;
 	}
 	std::string File_Path;
+	std::string Trace_Directory, Trace_Extension = ".trace";
+	unsigned int Trace_Selection_Seed = 1;
+	uint64_t Trace_Inter_File_Gap_NS = 1;
 	int Percentage_To_Be_Executed;
 	int Relay_Count;//Positive: fixed replay count; zero: repeat until EOL
 	Trace_Time_Unit Time_Unit;

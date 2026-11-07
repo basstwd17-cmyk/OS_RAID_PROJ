@@ -1,0 +1,14 @@
+<SWANS_Parameter_Set>
+  <SWANS_Enabled>true</SWANS_Enabled>
+  <SWANS_Reserve_Zone_Enabled>false</SWANS_Reserve_Zone_Enabled>
+  <SWANS_Wear_Metric>TEC</SWANS_Wear_Metric>
+  <SWANS_Migration_Trigger>DYNAMIC_WEAR</SWANS_Migration_Trigger>
+  <SWANS_TEC_TH_Precautionary_PctPoint>5</SWANS_TEC_TH_Precautionary_PctPoint>
+  <SWANS_TEC_TH_Critical_PctPoint>10</SWANS_TEC_TH_Critical_PctPoint>
+  <SWANS_Zone_Selection>SSD_POPULARITY</SWANS_Zone_Selection>
+  <SWANS_Zone_Popularity_Mode>HALF_DECAY</SWANS_Zone_Popularity_Mode>
+  <SWANS_Zone_Popularity_Period>40000000000</SWANS_Zone_Popularity_Period>
+  <SWANS_Epoch_Default>40000000000</SWANS_Epoch_Default>
+  <SWANS_Epoch_Placement>40000000000</SWANS_Epoch_Placement>
+  <SWANS_Epoch_Migration>40000000000</SWANS_Epoch_Migration>
+</SWANS_Parameter_Set>

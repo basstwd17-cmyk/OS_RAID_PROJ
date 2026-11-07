@@ -1,10 +1,27 @@
 #include "Flash_Block_Manager.h"
 #include "Device_Lifecycle_Monitor.h"
+#include <cmath>
+#include <stdexcept>
 
 
 namespace SSD_Components
 {
 	unsigned int Block_Pool_Slot_Type::Page_vector_size = 0;
+	const TECWearSnapshot& Flash_Block_Manager_Base::Get_wear_snapshot() const
+	{
+		if (!tec_dirty) return tec_snapshot;
+		std::vector<unsigned int> counts;
+		counts.reserve(static_cast<size_t>(total_block_count));
+		for (unsigned int c = 0; c < channel_count; ++c)
+			for (unsigned int h = 0; h < chip_no_per_channel; ++h)
+				for (unsigned int d = 0; d < die_no_per_chip; ++d)
+					for (unsigned int p = 0; p < plane_no_per_die; ++p)
+						for (unsigned int b = 0; b < block_no_per_plane; ++b)
+							counts.push_back(plane_manager[c][h][d][p].Blocks[b].Erase_count);
+		tec_snapshot = Calculate_TEC(std::move(counts), original_op_block_budget, max_allowed_block_erase_count);
+		tec_dirty = false;
+		return tec_snapshot;
+	}
 	Flash_Block_Manager_Base::Flash_Block_Manager_Base(const std::string& device_id, GC_and_WL_Unit_Base* gc_and_wl_unit, unsigned int max_allowed_block_erase_count, unsigned int total_concurrent_streams_no,
 		unsigned int channel_count, unsigned int chip_no_per_channel, unsigned int die_no_per_chip, unsigned int plane_no_per_die,
 		unsigned int block_no_per_plane, unsigned int page_no_per_block, double overprovisioning_ratio,
@@ -303,10 +320,32 @@ namespace SSD_Components
 		return true;
 	}
 
+	void Flash_Block_Manager_Base::Configure_end_of_life(const std::string& mode, double tec_threshold_percent)
+	{
+		if (mode != "OP_RATIO" && mode != "TEC")
+			throw std::invalid_argument("End_of_Life_Mode must be OP_RATIO or TEC");
+		if (mode == "OP_RATIO" && (!std::isfinite(end_of_life_threshold)
+			|| end_of_life_threshold < 0 || end_of_life_threshold >= overprovisioning_ratio))
+			throw std::invalid_argument("Invalid OP EOL threshold");
+		if (mode == "TEC") {
+			if (!std::isfinite(tec_threshold_percent) || tec_threshold_percent <= 0 || tec_threshold_percent > 100)
+				throw std::invalid_argument("End_of_Life_TEC_Threshold_Percent must be in (0, 100]");
+			if (!Get_wear_snapshot().Valid) throw std::invalid_argument(Get_wear_snapshot().Error);
+		}
+		end_of_life_mode = mode;
+		end_of_life_tec_threshold_percent = tec_threshold_percent;
+	}
+
 	void Flash_Block_Manager_Base::Check_end_of_life()
 	{
 		const double remaining_op_ratio = Get_current_op_ratio();
-		if (!eol_reached && remaining_op_ratio <= end_of_life_threshold) {
+		bool reached = remaining_op_ratio <= end_of_life_threshold;
+		if (end_of_life_mode == "TEC") {
+			const auto& wear = Get_wear_snapshot();
+			if (!wear.Valid) throw std::runtime_error(wear.Error);
+			reached = wear.Wear_percent >= end_of_life_tec_threshold_percent;
+		}
+		if (!eol_reached && reached) {
 			eol_reached = true;
 			Device_Lifecycle_Monitor::Report_end_of_life(device_id, Simulator->Time(), bad_block_count,
 				total_block_count, Get_remaining_usable_block_count(), remaining_op_ratio);

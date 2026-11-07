@@ -189,6 +189,7 @@ SSD_Device::SSD_Device(Device_Parameter_Set *parameters, std::vector<IO_Flow_Par
 												  parameters->Overprovisioning_Ratio, parameters->Bad_Block_Retirement_Enabled,
 												  parameters->End_of_Life_Threshold);
 		ftl->BlockManager = fbm;
+		fbm->Configure_end_of_life(parameters->End_of_Life_Mode, parameters->End_of_Life_TEC_Threshold_Percent);
 
 		//Step 7: create Address_Mapping_Unit
 		SSD_Components::Address_Mapping_Unit_Base *amu;

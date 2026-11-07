@@ -179,6 +179,7 @@ namespace SSD_Components
 			void Get_translation_mapping_info_for_gc(const stream_id_type stream_id, const MVPN_type mvpn, MPPN_type& mppa, sim_time_type& timestamp);
 			void Allocate_new_page_for_gc(NVM_Transaction_Flash_WR* transaction, bool is_translation_page);
 			void Discard_logical_range(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count);
+			bool Is_discard_complete(stream_id_type stream_id, LHA_type start_lha, unsigned int lha_count) override;
 
 			void Store_mapping_table_on_flash_at_start();
 		LPA_type Get_logical_pages_count(stream_id_type stream_id);

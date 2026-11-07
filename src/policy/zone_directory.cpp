@@ -1,6 +1,7 @@
 #include "zone_directory.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -26,7 +27,7 @@ void ZoneDirectory::Initialize(unsigned int ssd_count,
 	unsigned int stripe_unit_lba,
 	uint64_t zone_size_lba,
 	unsigned int block_unit_lba,
-	LHA_type total_logical_lha_count)
+	LHA_type total_logical_lha_count, bool reserve_zone, LHA_type backend_lha_count)
 {
 	if (ssd_count == 0 || stripe_unit_lba == 0 || zone_size_lba == 0 || block_unit_lba == 0) {
 		throw std::invalid_argument("ZoneDirectory::Initialize invalid geometry");
@@ -45,12 +46,14 @@ void ZoneDirectory::Initialize(unsigned int ssd_count,
 	this->block_unit_lba = block_unit_lba;
 	this->stripes_per_zone = static_cast<unsigned int>(stripes_per_zone_64);
 	this->total_logical_lha_count = total_logical_lha_count;
+	popularity_epoch = 0;
 
 	if (total_logical_lha_count == 0) {
 		per_ssd_logical_lha_count = 0;
 		total_stripe_count = 0;
 		zones_per_ssd = 0;
 		zone_count = 0;
+		user_zone_count = 0;
 		zones.clear();
 		initialized = true;
 		return;
@@ -63,6 +66,7 @@ void ZoneDirectory::Initialize(unsigned int ssd_count,
 
 	per_ssd_logical_lha_count = total_logical_lha_count / ssd_count
 		+ (total_logical_lha_count % ssd_count == 0 ? 0 : 1);
+	per_ssd_physical_lha_count = reserve_zone ? backend_lha_count : per_ssd_logical_lha_count;
 	zones_per_ssd = per_ssd_logical_lha_count / this->zone_size_lba;
 	if (per_ssd_logical_lha_count % this->zone_size_lba != 0) {
 		zones_per_ssd++;
@@ -71,6 +75,13 @@ void ZoneDirectory::Initialize(unsigned int ssd_count,
 		throw std::overflow_error("ZoneDirectory::Initialize zone count overflow");
 	}
 	zone_count = zones_per_ssd * ssd_count;
+	user_zone_count = zone_count;
+	if (reserve_zone) {
+		if (total_logical_lha_count % ssd_count != 0 || per_ssd_logical_lha_count % zone_size_lba != 0
+			|| per_ssd_physical_lha_count / zone_size_lba <= zones_per_ssd)
+			throw std::invalid_argument("Reserve requires full exported zones and one extra backend zone per SSD");
+		zone_count += ssd_count;
+	}
 
 	zones.clear();
 	zones.resize(static_cast<size_t>(zone_count));
@@ -81,6 +92,7 @@ void ZoneDirectory::Initialize(unsigned int ssd_count,
 		entry.Number_of_writes = 0;
 		entry.Empty = true;
 		entry.Migrating = false;
+		entry.Reserve = zone_id >= user_zone_count;
 		entry.Written_blocks_by_stream.clear();
 	}
 
@@ -117,6 +129,8 @@ uint64_t ZoneDirectory::Zone_id_of_lba(LHA_type lba) const
 
 void ZoneDirectory::Resolve(LHA_type lba, ZoneResolveResult& result) const
 {
+	if (initialized && lba >= total_logical_lha_count)
+		throw std::out_of_range("Host LBA is outside exported capacity (reserved zones are hidden)");
 	if (!initialized || stripe_unit_lba == 0 || zone_size_lba == 0 || ssd_count == 0 || zone_count == 0) {
 		result.Disk_id = 0;
 		result.Local_lba = lba;
@@ -248,6 +262,18 @@ uint64_t ZoneDirectory::Migrating_zone_count() const
 void ZoneDirectory::Observe_write(stream_id_type stream_id, uint64_t zone_id, uint64_t zone_lba_offset,
 	unsigned int write_sectors, bool count_host_request_zone_touch)
 {
+	Observe_data(stream_id, zone_id, zone_lba_offset, write_sectors);
+	if (write_sectors == 0) return;
+	ZoneEntry& zone = zones[static_cast<size_t>(zone_id)];
+	if (count_host_request_zone_touch) zone.Number_of_writes++;
+	zone.Written_sectors += write_sectors;
+	if (popularity_mode == "HALF_DECAY") zone.Popularity += write_sectors;
+	else zone.Epoch_write_sectors += write_sectors;
+}
+
+void ZoneDirectory::Observe_data(stream_id_type stream_id, uint64_t zone_id, uint64_t zone_lba_offset,
+	unsigned int write_sectors)
+{
 	Validate_zone_id(zone_id);
 	if (write_sectors == 0) {
 		return;
@@ -260,11 +286,10 @@ void ZoneDirectory::Observe_write(stream_id_type stream_id, uint64_t zone_id, ui
 		throw std::out_of_range("ZoneDirectory observe write range out of zone bounds");
 	}
 	ZoneEntry& zone = zones[static_cast<size_t>(zone_id)];
-	if (count_host_request_zone_touch) {
-		zone.Number_of_writes++;
-	}
-	zone.Written_sectors += write_sectors;
 	zone.Empty = false;
+	auto& valid = zone.Valid_sectors_by_stream[stream_id];
+	valid.resize(static_cast<size_t>(zone_size_lba), false);
+	for (uint64_t sector = zone_lba_offset; sector <= end_lba_offset; ++sector) valid[sector] = true;
 
 	const uint64_t start_block = zone_lba_offset / block_unit_lba;
 	const uint64_t end_block = end_lba_offset / block_unit_lba;
@@ -355,12 +380,71 @@ bool ZoneDirectory::Is_reserved(uint64_t zone_id, const std::vector<uint64_t>& r
 	return std::find(reserved.begin(), reserved.end(), zone_id) != reserved.end();
 }
 
+void ZoneDirectory::Configure_popularity(const std::string& mode, sim_time_type period)
+{
+	if ((mode != "HALF_DECAY" && mode != "LAST_EPOCH") || (mode == "LAST_EPOCH" && period == 0))
+		throw std::invalid_argument("Popularity requires HALF_DECAY or LAST_EPOCH; LAST_EPOCH requires a positive period");
+	popularity_mode = mode;
+	popularity_period = period;
+	popularity_epoch = 0;
+	for (auto& zone : zones) { zone.Popularity = 0; zone.Epoch_write_sectors = 0; }
+}
+
+void ZoneDirectory::Advance_popularity(sim_time_type now)
+{
+	if (popularity_mode == "HALF_DECAY") return;
+	const uint64_t epoch = now / popularity_period;
+	if (epoch <= popularity_epoch) return;
+	const uint64_t elapsed = epoch - popularity_epoch;
+	for (auto& zone : zones) {
+		zone.Popularity = elapsed == 1 ? static_cast<double>(zone.Epoch_write_sectors) : 0.0;
+		zone.Epoch_write_sectors = 0;
+	}
+	popularity_epoch = epoch;
+}
+
+void ZoneDirectory::On_migration_completed()
+{
+	if (popularity_mode != "HALF_DECAY") return;
+	for (auto& zone : zones) zone.Popularity *= 0.5;
+}
+
+double ZoneDirectory::Zone_popularity(uint64_t zone_id) const
+{
+	Validate_zone_id(zone_id);
+	return zones[zone_id].Popularity;
+}
+
+uint64_t ZoneDirectory::Zone_valid_sectors(uint64_t zone_id) const
+{
+	Validate_zone_id(zone_id);
+	std::vector<bool> valid(static_cast<size_t>(zone_size_lba), false);
+	for (const auto& stream : zones[zone_id].Valid_sectors_by_stream)
+		for (size_t i = 0; i < stream.second.size(); ++i) valid[i] = valid[i] || stream.second[i];
+	return static_cast<uint64_t>(std::count(valid.begin(), valid.end(), true));
+}
+
+double ZoneDirectory::Zone_valid_ratio(uint64_t zone_id) const
+{
+	return static_cast<double>(Zone_valid_sectors(zone_id)) / zone_size_lba;
+}
+
+uint64_t ZoneDirectory::Zone_copy_sectors(uint64_t zone_id) const
+{
+	Validate_zone_id(zone_id);
+	uint64_t sectors = 0;
+	for (const auto& stream : zones[zone_id].Written_blocks_by_stream)
+		for (size_t block = 0; block < stream.second.size(); ++block)
+			if (stream.second[block]) sectors += std::min<uint64_t>(block_unit_lba, zone_size_lba - block * block_unit_lba);
+	return sectors;
+}
+
 bool ZoneDirectory::Is_full_physical_zone(const ZoneEntry& zone) const
 {
-	if (zone_size_lba == 0 || per_ssd_logical_lha_count < zone_size_lba) {
+	if (zone_size_lba == 0 || per_ssd_physical_lha_count < zone_size_lba) {
 		return false;
 	}
-	return zone.Physical_zone <= (per_ssd_logical_lha_count - zone_size_lba) / zone_size_lba;
+	return zone.Physical_zone <= (per_ssd_physical_lha_count - zone_size_lba) / zone_size_lba;
 }
 
 uint64_t ZoneDirectory::Find_empty_zone_on_ssd(unsigned int ssd_id, const std::vector<uint64_t>& reserved) const
@@ -370,7 +454,7 @@ uint64_t ZoneDirectory::Find_empty_zone_on_ssd(unsigned int ssd_id, const std::v
 	}
 	for (uint64_t zone_id = 0; zone_id < zone_count; zone_id++) {
 		const ZoneEntry& zone = zones[static_cast<size_t>(zone_id)];
-		if (zone.Empty && !zone.Migrating && Is_full_physical_zone(zone)
+		if (!zone.Reserve && zone.Empty && !zone.Migrating && Is_full_physical_zone(zone)
 			&& !Is_reserved(zone_id, reserved) && Owner_ssd(zone_id) == ssd_id) {
 			return zone_id;
 		}
@@ -384,26 +468,70 @@ uint64_t ZoneDirectory::Find_hottest_used_zone_on_ssd(unsigned int ssd_id, const
 		return INVALID_ZONE_ID;
 	}
 	uint64_t selected = INVALID_ZONE_ID;
-	uint64_t best = 0;
+	double best = 0;
+	uint64_t best_cost = 0;
 	for (uint64_t zone_id = 0; zone_id < zone_count; zone_id++) {
 		const ZoneEntry& zone = zones[static_cast<size_t>(zone_id)];
-		if (zone.Empty || zone.Migrating || Is_reserved(zone_id, reserved) || Owner_ssd(zone_id) != ssd_id) {
+		if (zone.Reserve || zone.Empty || zone.Migrating || Is_reserved(zone_id, reserved) || Owner_ssd(zone_id) != ssd_id) {
 			continue;
 		}
-		// Keep Number_of_writes for paper-style request-count reporting, but pick
-		// the migration source by the actual logical byte volume written to it.
-		if (selected == INVALID_ZONE_ID || zone.Written_sectors > best) {
+		const uint64_t cost = Zone_copy_sectors(zone_id);
+		if (selected == INVALID_ZONE_ID || zone.Popularity > best
+			|| (zone.Popularity == best && cost < best_cost)) {
 			selected = zone_id;
-			best = zone.Written_sectors;
+			best = zone.Popularity;
+			best_cost = cost;
 		}
 	}
 	return selected;
+}
+
+uint64_t ZoneDirectory::Find_coldest_used_zone_on_ssd(unsigned int ssd_id, const std::vector<uint64_t>& reserved) const
+{
+	uint64_t selected = INVALID_ZONE_ID;
+	for (uint64_t z = 0; z < zone_count; ++z) {
+		const auto& zone = zones[z];
+		if (zone.Reserve || zone.Empty || zone.Migrating || Is_reserved(z, reserved) || zone.Physical_ssd != ssd_id) continue;
+		if (selected == INVALID_ZONE_ID || zone.Popularity < zones[selected].Popularity
+			|| (zone.Popularity == zones[selected].Popularity && Zone_copy_sectors(z) < Zone_copy_sectors(selected)))
+			selected = z;
+	}
+	return selected;
+}
+
+uint64_t ZoneDirectory::Find_migration_zone(unsigned int ssd, bool global, bool cumulative,
+	const std::vector<uint64_t>& reserved) const
+{
+	uint64_t selected = INVALID_ZONE_ID;
+	for (uint64_t z = 0; z < zones.size(); ++z) {
+		const auto& zone = zones[z];
+		if (zone.Reserve || zone.Empty || zone.Migrating || Is_reserved(z, reserved)
+			|| (!global && Owner_ssd(z) != ssd)) continue;
+		if (selected == INVALID_ZONE_ID || (cumulative
+			? zone.Written_sectors > zones[selected].Written_sectors
+			: zone.Popularity > zones[selected].Popularity)) selected = z;
+	}
+	return selected; // equal scores: smallest logical zone ID
 }
 
 void ZoneDirectory::Mark_migrating(uint64_t zone_id, bool migrating)
 {
 	Validate_zone_id(zone_id);
 	zones[static_cast<size_t>(zone_id)].Migrating = migrating;
+}
+
+bool ZoneDirectory::Is_reserve_zone(uint64_t zone_id) const
+{
+	Validate_zone_id(zone_id);
+	return zones[zone_id].Reserve;
+}
+
+uint64_t ZoneDirectory::Find_reserve_zone_on_ssd(unsigned int ssd_id, const std::vector<uint64_t>& excluded) const
+{
+	for (uint64_t z = user_zone_count; z < zone_count; ++z)
+		if (zones[z].Reserve && zones[z].Empty && !zones[z].Migrating && zones[z].Physical_ssd == ssd_id
+			&& !Is_reserved(z, excluded)) return z;
+	return INVALID_ZONE_ID;
 }
 
 void ZoneDirectory::Swap_placement(uint64_t logical_zone_a, uint64_t logical_zone_b)
@@ -433,6 +561,9 @@ void ZoneDirectory::Reset_logical_zone(uint64_t logical_zone)
 	ZoneEntry& zone = zones[static_cast<size_t>(logical_zone)];
 	zone.Number_of_writes = 0;
 	zone.Written_sectors = 0;
+	zone.Epoch_write_sectors = 0;
+	zone.Popularity = 0;
+	zone.Valid_sectors_by_stream.clear();
 	zone.Empty = true;
 	zone.Migrating = false;
 	zone.Written_blocks_by_stream.clear();

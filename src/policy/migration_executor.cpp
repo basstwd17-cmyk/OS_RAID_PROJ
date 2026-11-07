@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 
 namespace RAID_Policy {
 
@@ -46,7 +47,45 @@ void MigrationExecutor::Configure(unsigned int buffer_limit_per_task)
 	this->buffer_limit_per_task = buffer_limit_per_task == 0 ? 1 : buffer_limit_per_task;
 }
 
-void MigrationExecutor::Start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory)
+void MigrationExecutor::Configure_limits(const MigrationLimits& value)
+{
+	if ((value.Slice_time || value.Slice_sectors || value.Pause_on_read) && !value.Pause_duration)
+		throw std::invalid_argument("Migration pause duration must be positive when a pause condition is enabled");
+	limits = value;
+}
+
+sim_time_type MigrationExecutor::Next_wakeup(sim_time_type fallback) const
+{
+	sim_time_type next = std::numeric_limits<sim_time_type>::max();
+	for (const auto& task : inflight) {
+		if (!task.Active_request_id.empty()) continue;
+		next = std::min(next, task.Resume_at ? task.Resume_at : fallback);
+	}
+	return next;
+}
+
+bool MigrationExecutor::Pause_before_copy(InflightTask& task, sim_time_type now)
+{
+	if (task.Resume_at) {
+		if (now < task.Resume_at) return true;
+		task.Resume_at = 0;
+		task.Slice_start = now;
+		task.Slice_sectors = 0;
+		task.Issued_in_slice = false;
+		task.Read_pause_pending = false;
+	}
+	if (!task.Issued_in_slice) return false; // guarantee progress even under sustained reads
+	bool time = limits.Slice_time && now - task.Slice_start >= limits.Slice_time;
+	bool sectors = limits.Slice_sectors && task.Slice_sectors >= limits.Slice_sectors;
+	bool read = limits.Pause_on_read && task.Read_pause_pending;
+	if (!time && !sectors && !read) return false;
+	time_pauses += time; sector_pauses += sectors; read_pauses += read;
+	task.Resume_at = now > std::numeric_limits<sim_time_type>::max() - limits.Pause_duration
+		? std::numeric_limits<sim_time_type>::max() : now + limits.Pause_duration;
+	return true;
+}
+
+void MigrationExecutor::Start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory, sim_time_type now)
 {
 	zone_bytes = directory.Zone_size_lba() * SECTOR_SIZE_IN_BYTE;
 	block_bytes = static_cast<uint64_t>(directory.Block_unit_lba()) * SECTOR_SIZE_IN_BYTE;
@@ -56,20 +95,50 @@ void MigrationExecutor::Start(const std::vector<MigrationTask>& tasks, ZoneDirec
 	for (size_t i = 0; i < tasks.size(); i++) {
 		InflightTask item;
 		item.Task = tasks[i];
+		item.Original_op = tasks[i].Op;
+		item.Locked_zones = {tasks[i].Op.Hot_zone, tasks[i].Op.Cold_zone};
+		item.Slice_start = now;
+		if (tasks[i].Op.Reserve_zone != INVALID_ZONE_ID) {
+			if (tasks[i].Cold_copies.empty() || !directory.Is_reserve_zone(tasks[i].Op.Reserve_zone)
+				|| !directory.Is_empty(tasks[i].Op.Reserve_zone))
+				throw std::invalid_argument("Exchange requires cold copies and an empty hidden reserve");
+			item.Cold_stage = true;
+			item.Hot_copies = tasks[i].Copies;
+			item.Locked_zones.push_back(tasks[i].Op.Reserve_zone);
+			item.Task.Op.Hot_zone = tasks[i].Op.Cold_zone;
+			item.Task.Op.Cold_zone = tasks[i].Op.Reserve_zone;
+			item.Task.Op.Hot_ssd = tasks[i].Op.Cold_ssd;
+			item.Task.Op.Cold_ssd = tasks[i].Op.Hot_ssd;
+			item.Task.Copies = tasks[i].Cold_copies;
+		}
+		Initialize_stage(item, directory);
+		for (auto zone : item.Locked_zones) directory.Mark_migrating(zone, true);
+		inflight.push_back(std::move(item));
+	}
+}
+
+void MigrationExecutor::Initialize_stage(InflightTask& item, ZoneDirectory& directory)
+{
+		item.Buffer = MigrationBuffer();
+		item.Restore_copies.clear();
+		item.Restore_block_states.clear();
+		item.Restore_after_active_write.clear();
+		item.Discarded_source_blocks.clear();
+		item.Pending_source_discards.clear();
 		item.Next_grab = 0;
 		item.Next_restore = 0;
 		item.State = TaskState::GRABBING;
 		item.Active_request_id.clear();
 		item.Active_block_offset = 0;
 		item.Active_stream_id = 0;
-		item.Buffer.Logical_zone = tasks[i].Op.Hot_zone;
-		item.Buffer.Source_ssd = tasks[i].Op.Hot_ssd;
-		item.Buffer.Target_ssd = tasks[i].Op.Cold_ssd;
+		item.Buffer.Logical_zone = item.Task.Op.Hot_zone;
+		item.Buffer.Source_ssd = item.Task.Op.Hot_ssd;
+		item.Buffer.Target_ssd = item.Task.Op.Cold_ssd;
 		const uint64_t zone_size_lba = directory.Zone_size_lba();
 		const unsigned int block_unit_lba = directory.Block_unit_lba();
 		const uint64_t block_count = block_unit_lba == 0 ? 0 : (zone_size_lba + block_unit_lba - 1) / block_unit_lba;
-		for (size_t copy_index = 0; copy_index < tasks[i].Copies.size(); copy_index++) {
-			const stream_id_type stream_id = tasks[i].Copies[copy_index].Stream_id;
+		for (size_t copy_index = 0; copy_index < item.Task.Copies.size(); copy_index++) {
+			const stream_id_type stream_id = item.Task.Copies[copy_index].Stream_id;
 			ensure_block_bitmap(item.Buffer.Grabbed_blocks, stream_id, static_cast<size_t>(block_count));
 			ensure_block_bitmap(item.Buffer.Dirty_blocks, stream_id, static_cast<size_t>(block_count));
 			ensure_block_bitmap(item.Discarded_source_blocks, stream_id, static_cast<size_t>(block_count));
@@ -77,10 +146,6 @@ void MigrationExecutor::Start(const std::vector<MigrationTask>& tasks, ZoneDirec
 			item.Restore_after_active_write[stream_id].assign(static_cast<size_t>(block_count), false);
 		}
 		item.Buffer.Valid = true;
-		inflight.push_back(item);
-		directory.Mark_migrating(tasks[i].Op.Hot_zone, true);
-		directory.Mark_migrating(tasks[i].Op.Cold_zone, true);
-	}
 }
 
 bool MigrationExecutor::Has_active_copy() const
@@ -110,9 +175,9 @@ MigrationExecutor::AbortSummary MigrationExecutor::Abort_all(ZoneDirectory& dire
 		InflightTask& task = inflight[i];
 		summary.Task_count++;
 		summary.Deferred_request_count += task.Deferred_requests.size();
-		directory.Mark_migrating(task.Task.Op.Hot_zone, false);
-		directory.Mark_migrating(task.Task.Op.Cold_zone, false);
-		if (Task_finished) Task_finished(task.Task.Op.Hot_zone, true);
+		// EOL is terminal, not a resumable rollback: partially copied locations
+		// remain locked and must never be advertised as reusable empty zones.
+		if (Task_finished) Task_finished(task.Original_op.Hot_zone, true);
 	}
 	inflight.clear();
 	return summary;
@@ -121,7 +186,7 @@ MigrationExecutor::AbortSummary MigrationExecutor::Abort_all(ZoneDirectory& dire
 bool MigrationExecutor::Is_intercept_target(const InflightTask& task, const std::vector<uint64_t>& request_zone_ids) const
 {
 	for (size_t i = 0; i < request_zone_ids.size(); i++) {
-		if (request_zone_ids[i] == task.Task.Op.Hot_zone || request_zone_ids[i] == task.Task.Op.Cold_zone) {
+		if (Hits_zone(request_zone_ids[i], task.Locked_zones)) {
 			return true;
 		}
 	}
@@ -209,6 +274,10 @@ MigrationExecutor::InterceptResult MigrationExecutor::Maybe_intercept(SSD_Compon
 	if (request == nullptr) {
 		return InterceptResult::SUBMITTED;
 	}
+	if (limits.Pause_on_read && request->Type == SSD_Components::UserRequestType::READ
+		&& !Intersects_inflight_zones(request_zone_ids)) {
+		for (auto& task : inflight) if (!task.Resume_at) task.Read_pause_pending = true;
+	}
 
 	for (size_t i = 0; i < inflight.size(); i++) {
 		InflightTask& task = inflight[i];
@@ -223,7 +292,8 @@ MigrationExecutor::InterceptResult MigrationExecutor::Maybe_intercept(SSD_Compon
 		deferred.Request = request;
 		deferred.Complete_without_dispatch = false;
 		deferred.Enqueue_time = enqueue_time;
-		if (request->Type == SSD_Components::UserRequestType::WRITE && Hits_zone(task.Task.Op.Hot_zone, request_zone_ids)) {
+		if (task.Original_op.Reserve_zone == INVALID_ZONE_ID
+			&& request->Type == SSD_Components::UserRequestType::WRITE && Hits_zone(task.Task.Op.Hot_zone, request_zone_ids)) {
 			Mark_dirty_blocks(task, request, directory);
 			deferred.Complete_without_dispatch = Hits_only_zone(task.Task.Op.Hot_zone, request_zone_ids);
 			if (deferred.Complete_without_dispatch && observe_buffered_write) {
@@ -256,6 +326,7 @@ bool MigrationExecutor::Notify_request_completed(io_request_id_type request_id, 
 			}
 			task.Next_grab++;
 		} else if (task.State == TaskState::RESTORING) {
+			task.Slice_sectors += task.Active_sectors;
 			std::vector<RestoreBlockState>& restore_states = task.Restore_block_states[task.Active_stream_id];
 			std::vector<bool>& restore_after_active_write = task.Restore_after_active_write[task.Active_stream_id];
 			if (task.Active_block_offset < restore_states.size()) {
@@ -377,14 +448,26 @@ void MigrationExecutor::Build_restore_copies(InflightTask& task, ZoneDirectory& 
 	}
 }
 
-void MigrationExecutor::Drain_task(InflightTask& task, ZoneDirectory& directory)
+bool MigrationExecutor::Drain_task(InflightTask& task, ZoneDirectory& directory)
 {
 	directory.Complete_migration(task.Task.Op.Hot_zone, task.Task.Op.Cold_zone, task.Buffer.Dirty_blocks);
+	if (task.Cold_stage) {
+		cold_stages_completed++;
+		task.Cold_stage = false;
+		task.Task.Op = task.Original_op;
+		task.Task.Op.Cold_zone = task.Original_op.Reserve_zone;
+		task.Task.Copies = std::move(task.Hot_copies);
+		Initialize_stage(task, directory);
+		for (auto zone : task.Locked_zones) directory.Mark_migrating(zone, true);
+		return false;
+	}
+	for (auto zone : task.Locked_zones) directory.Mark_migrating(zone, false);
 
 	while (!task.Deferred_requests.empty()) {
 		replay_queue.push_back(task.Deferred_requests.front());
 		task.Deferred_requests.pop_front();
 	}
+	return true;
 }
 
 void MigrationExecutor::Discard_source_block(InflightTask& task, stream_id_type stream_id, unsigned int block_offset,
@@ -436,7 +519,7 @@ void MigrationExecutor::Discard_source_copies(InflightTask& task, const DiscardF
 
 void MigrationExecutor::Poll(ZoneDirectory& directory,
 	const SubmitCopyFunction& submit_copy,
-	const DiscardFunction& discard_source)
+	const DiscardFunction& discard_source, sim_time_type now)
 {
 	for (size_t i = 0; i < inflight.size(); i++) {
 		InflightTask& task = inflight[i];
@@ -456,9 +539,12 @@ void MigrationExecutor::Poll(ZoneDirectory& directory,
 						break;
 					}
 					if (task.Active_request_id.empty()) {
+						if (Pause_before_copy(task, now)) break;
 						const StripeCopyPlan& copy = task.Task.Copies[task.Next_grab];
 						task.Active_request_id = submit_copy(copy, false, i);
 						if (!task.Active_request_id.empty()) {
+							task.Issued_in_slice = true;
+							task.Active_sectors = copy.Lba_count;
 							task.Active_block_offset = copy.Stripe_offset;
 							task.Active_stream_id = copy.Stream_id;
 						}
@@ -478,9 +564,12 @@ void MigrationExecutor::Poll(ZoneDirectory& directory,
 						break;
 					}
 					if (task.Active_request_id.empty()) {
+						if (Pause_before_copy(task, now)) break;
 						const StripeCopyPlan& copy = task.Restore_copies[task.Next_restore];
 						task.Active_request_id = submit_copy(copy, true, i);
 						if (!task.Active_request_id.empty()) {
+							task.Issued_in_slice = true;
+							task.Active_sectors = copy.Lba_count;
 							task.Active_block_offset = copy.Stripe_offset;
 							task.Active_stream_id = copy.Stream_id;
 							std::vector<RestoreBlockState>& restore_states = task.Restore_block_states[copy.Stream_id];
@@ -493,9 +582,18 @@ void MigrationExecutor::Poll(ZoneDirectory& directory,
 				case TaskState::DRAINING_QUEUE:
 				{
 					Discard_source_copies(task, discard_source, i);
-					Drain_task(task, directory);
+					bool discarded = true;
+					for (const auto& copy : task.Task.Copies) {
+						const auto& bits = task.Discarded_source_blocks[copy.Stream_id];
+						if (copy.Stripe_offset >= bits.size() || !bits[copy.Stripe_offset]) discarded = false;
+					}
+					if (!discarded) break; // retry invalidation; never recycle a still-live source
+					if (!Drain_task(task, directory)) { advance_without_io = true; break; }
 					task.State = TaskState::DONE;
-					if (Task_finished) Task_finished(task.Task.Op.Hot_zone, false);
+					// Once per whole task, after both reserve-exchange stages and
+					// successful source invalidation. Pauses/aborts never age heat.
+					directory.On_migration_completed();
+					if (Task_finished) Task_finished(task.Original_op.Hot_zone, false);
 					break;
 				}
 				case TaskState::DONE:

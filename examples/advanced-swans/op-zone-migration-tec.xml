@@ -1,0 +1,10 @@
+<SWANS_Parameter_Set>
+  <SWANS_Enabled>true</SWANS_Enabled>
+  <op_zone_migration>true</op_zone_migration>
+  <SWANS_Wear_Metric>TEC</SWANS_Wear_Metric>
+  <SWANS_Migration_Trigger>DYNAMIC_WEAR</SWANS_Migration_Trigger>
+  <SWANS_Zone_Selection>SSD_POPULARITY</SWANS_Zone_Selection>
+  <SWANS_TEC_TH_Precautionary_PctPoint>5</SWANS_TEC_TH_Precautionary_PctPoint>
+  <SWANS_TEC_TH_Critical_PctPoint>10</SWANS_TEC_TH_Critical_PctPoint>
+  <SWANS_Zone_Popularity_Mode>HALF_DECAY</SWANS_Zone_Popularity_Mode>
+</SWANS_Parameter_Set>
