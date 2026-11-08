@@ -63,6 +63,8 @@ struct MigrationTask
 };
 
 struct MigrationLimits {
+	bool On_demand = false;
+	sim_time_type Period = 0; // fixed epoch length for ON_DEMAND; deadline is next epoch
 	sim_time_type Slice_time = 0; // ns; 0 disables
 	uint64_t Slice_sectors = 0; // completed destination sectors per slice; 0 disables
 	sim_time_type Pause_duration = 1000000;

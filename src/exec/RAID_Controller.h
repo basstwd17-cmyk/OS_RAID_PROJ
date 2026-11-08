@@ -53,7 +53,7 @@ public:
 		const std::string& selection, double precautionary, double critical);
 	void Advance_zone_popularity(sim_time_type now) { zone_directory.Advance_popularity(now); }
 	void Configure_zone_popularity(const std::string& mode, sim_time_type period);
-	void Configure_migration_limits(const RAID_Policy::MigrationLimits& limits) { migration_executor.Configure_limits(limits); }
+	void Configure_migration_limits(const RAID_Policy::MigrationLimits& limits);
 	// Replace only the provider to add a new lifetime estimator; trigger stays unchanged.
 	void Set_wear_metric_provider(const std::string& name,
 		std::function<RAID_Policy::WearSnapshot()> provider);

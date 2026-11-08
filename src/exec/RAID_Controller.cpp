@@ -217,6 +217,18 @@ void RAID_Controller::Configure_zone_popularity(const std::string& mode, sim_tim
 	zone_directory.Configure_popularity(mode, period == 0 ? swans_epoch_default : period);
 }
 
+void RAID_Controller::Configure_migration_limits(const RAID_Policy::MigrationLimits& limits)
+{
+	migration_executor.Configure_limits(limits);
+	if (limits.On_demand) {
+		swans_epoch_migration = limits.Period;
+		next_policy_evaluation_time = limits.Period;
+		wear_leveling_policy.Require_single_zone_epochs();
+		SSD_Components::Device_Lifecycle_Monitor::Register_end_of_life_handler([this]() { Handle_end_of_life(); });
+		Schedule_swans_event(limits.Period);
+	}
+}
+
 void RAID_Controller::Set_wear_metric_provider(const std::string& name,
 	std::function<RAID_Policy::WearSnapshot()> provider)
 {
@@ -334,6 +346,7 @@ std::vector<RAID_Sub_Request> RAID_Controller::Split(LHA_type lba, unsigned int 
 				zone_directory.Resolve(current_lba, resolved);
 				zone_id = resolved.Zone_id;
 			}
+			migration_executor.Resolve_on_demand(resolved);
 
 			if (type == SSD_Components::UserRequestType::WRITE) {
 				const bool first_touch_in_request =
@@ -597,7 +610,9 @@ unsigned int RAID_Controller::Swans_mapping_chunk_length(const RAID_Policy::Zone
 	const uint64_t zone_remaining = zone_size > resolved.Zone_lba_offset
 		? zone_size - resolved.Zone_lba_offset : 1;
 	const uint64_t chunk = std::min<uint64_t>(remaining, std::min<uint64_t>(stripe_remaining, zone_remaining));
-	return static_cast<unsigned int>(chunk == 0 ? 1 : chunk);
+	const uint64_t bounded = migration_executor.On_demand()
+		? std::min<uint64_t>(chunk, zone_directory.Block_unit_lba() - resolved.Zone_lba_offset % zone_directory.Block_unit_lba()) : chunk;
+	return static_cast<unsigned int>(bounded == 0 ? 1 : bounded);
 }
 
 std::vector<uint64_t> RAID_Controller::Collect_zone_ids(LHA_type lba, unsigned int lba_count) const
@@ -803,6 +818,7 @@ void RAID_Controller::Notify_sub_request_completed(SSD_Components::User_Request*
 		}
 
 		inflight.erase(it);
+		migration_executor.Notify_host_completed(original_request->ID);
 		if (complete_callback) {
 			complete_callback(original_request);
 		}
@@ -930,7 +946,7 @@ void RAID_Controller::Handle_swans_event()
 		for (size_t i = 0; i < replay.size(); i++) {
 			if (replay[i].Request != nullptr && migration_executor.Has_inflight()) {
 				const std::vector<uint64_t> zones = Collect_zone_ids(replay[i].Request->Start_LBA, replay[i].Request->SizeInSectors);
-				if (migration_executor.Intersects_inflight_zones(zones)) {
+				if (migration_executor.Intersects_inflight_zones(zones) && !migration_executor.Replay_ready(replay[i].Request)) {
 					// This request may have been released by one completed task while
 					// still touching another migrating zone.  Keep it out of the
 					// normal mapping path until every currently active zone is stable.
@@ -971,6 +987,10 @@ void RAID_Controller::Handle_swans_event()
 	}
 
 	Try_replay_blocked_requests();
+	// Skip a missed boundary while a previous zone drains. New migrations only
+	// start on fixed ticks, never immediately after a delayed completion.
+	if (migration_executor.On_demand() && now > next_policy_evaluation_time)
+		next_policy_evaluation_time = (now / swans_epoch_migration + 1) * swans_epoch_migration;
 
 	if (now >= next_policy_evaluation_time) {
 		zone_directory.Advance_popularity(now);
@@ -1081,7 +1101,9 @@ void RAID_Controller::Handle_swans_event()
 				next_epoch_interval = swans_epoch_migration;
 				break;
 		}
-		next_policy_evaluation_time = now + std::max((sim_time_type)1, next_epoch_interval);
+		next_policy_evaluation_time = migration_executor.On_demand()
+			? (now / swans_epoch_migration + 1) * swans_epoch_migration
+			: now + std::max((sim_time_type)1, next_epoch_interval);
 	}
 
 	const bool has_inflight_user_or_background = !inflight.empty() || !subrequest_metadata_by_id.empty();
@@ -1172,7 +1194,8 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 	xmlwriter.Write_attribute_string("SWANS_Zone_Popularity_Mode", zone_directory.Popularity_mode());
 	xmlwriter.Write_attribute_string("SWANS_Zone_Popularity_Period", std::to_string(zone_directory.Popularity_period()));
 	xmlwriter.Write_attribute_string("SWANS_Zone_Popularity_Update", zone_directory.Popularity_mode() == "HALF_DECAY"
-		? "LIVE_WRITES_HALF_ALL_ZONES_PER_COMPLETED_MIGRATION" : "LAST_TIME_WINDOW");
+		? "LIVE_WRITES_HALF_ALL_ZONES_PER_COMPLETED_MIGRATION"
+		: (zone_directory.Popularity_mode() == "HALF_EPOCH" ? "LIVE_SECTORS_HALF_PER_FIXED_EPOCH" : "LAST_TIME_WINDOW"));
 	xmlwriter.Write_attribute_string("SWANS_Zone_Selection", wear_leveling_policy.Selection());
 	xmlwriter.Write_attribute_string("SWANS_Copy_Unit_LBA", std::to_string(zone_directory.Block_unit_lba()));
 	xmlwriter.Write_attribute_string("SWANS_Preconditioned_Valid_Sectors", std::to_string(preconditioned_valid_sectors));
@@ -1263,6 +1286,13 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 
 	xmlwriter.Write_attribute_string("SWANS_Enabled", swans_enabled ? "true" : "false");
 	xmlwriter.Write_attribute_string("SWANS_State", swans_state_to_string(swans_policy_state));
+	xmlwriter.Write_attribute_string("SWANS_Migration_Mode", migration_executor.On_demand() ? "ON_DEMAND" : "EAGER");
+	xmlwriter.Write_attribute_string("SWANS_Migration_Fixed_Period", migration_executor.On_demand() ? std::to_string(swans_epoch_migration) : "0");
+	xmlwriter.Write_attribute_string("SWANS_Lazy_Offloaded_Pages", std::to_string(migration_executor.Lazy_offloaded_pages()));
+	xmlwriter.Write_attribute_string("SWANS_Lazy_Copied_Pages", std::to_string(migration_executor.Lazy_copied_pages()));
+	xmlwriter.Write_attribute_string("SWANS_Lazy_Deadline_Drains", std::to_string(migration_executor.Lazy_deadline_drains()));
+	xmlwriter.Write_attribute_string("SWANS_Lazy_Cold_Write_Drains", std::to_string(migration_executor.Lazy_cold_write_drains()));
+	xmlwriter.Write_attribute_string("SWANS_Lazy_Remaining_Pages", std::to_string(migration_executor.Lazy_remaining_pages()));
 	// Mu is calculated from observed host and completed migration bytes normalized by
 	// SWANS_Balance_Unit_Bytes; keep the exported label aligned with the metric.
 	xmlwriter.Write_attribute_string("SWANS_Mu_Unit", "write_bytes_normalized_by_balance_unit");
@@ -1395,6 +1425,7 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 		xmlwriter.Write_attribute_string("End_Time", std::to_string(record.End_time));
 		xmlwriter.Write_attribute_string("Status", record.Status);
 		xmlwriter.Write_attribute_string("Mode", record.Reserve_zone == RAID_Policy::INVALID_ZONE_ID ? "EMPTY_DESTINATION" : "op_zone_migration");
+		xmlwriter.Write_attribute_string("Execution_Mode", migration_executor.On_demand() ? "ON_DEMAND" : "EAGER");
 		xmlwriter.Write_attribute_string("Reserve_Zone", record.Reserve_zone == RAID_Policy::INVALID_ZONE_ID ? "NONE" : std::to_string(record.Reserve_zone));
 		xmlwriter.Write_attribute_string("Cold_Copy_Sectors", std::to_string(record.Cold_copy_sectors));
 		xmlwriter.Write_attribute_string("Duration_ns", std::to_string(record.End_time >= record.Start_time ? record.End_time - record.Start_time : 0));

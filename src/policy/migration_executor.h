@@ -47,7 +47,17 @@ public:
 	uint64_t Sector_pauses() const { return sector_pauses; }
 	uint64_t Read_pauses() const { return read_pauses; }
 	uint64_t Cold_stages_completed() const { return cold_stages_completed; }
-	bool Has_inflight() const { return !inflight.empty(); }
+	bool Has_inflight() const { return lazy.Active || !inflight.empty(); }
+	bool On_demand() const { return limits.On_demand; }
+	bool Replay_ready(const SSD_Components::User_Request* request) const;
+	void Resolve_on_demand(ZoneResolveResult& resolved) const;
+	void Notify_host_completed(const io_request_id_type& id);
+	void Force_finish();
+	uint64_t Lazy_offloaded_pages() const { return lazy_offloaded_pages; }
+	uint64_t Lazy_copied_pages() const { return lazy_copied_pages; }
+	uint64_t Lazy_deadline_drains() const { return lazy_deadline_drains; }
+	uint64_t Lazy_cold_write_drains() const { return lazy_cold_write_drains; }
+	uint64_t Lazy_remaining_pages() const;
 	// A migration copy is issued one at a time per task.  The controller uses
 	// this to wait for the completion callback instead of continuously polling
 	// the simulator while flash I/O is in flight.
@@ -85,6 +95,38 @@ public:
 	std::function<void(uint64_t, bool)> Task_finished;
 
 private:
+	enum class LazyPhase { IDLE, READ, WRITE, DISCARD };
+	struct LazyState {
+		bool Active = false, Started = false, Cold = false, Force = false, Host_discard_ready = false;
+		bool Deadline_counted = false;
+		MigrationTask Task;
+		uint64_t Target_zone = INVALID_ZONE_ID;
+		sim_time_type Deadline = 0;
+		unsigned int Page_sectors = 0, Page = 0;
+		unsigned int Target_disk = 0;
+		LHA_type Target_lba = 0;
+		LazyPhase Phase = LazyPhase::IDLE;
+		std::vector<bool> Moved;
+		std::deque<unsigned int> Pending_host_discards;
+		std::vector<StripeCopyPlan> Runs;
+		size_t Run_index = 0;
+		io_request_id_type Copy_id, Host_id, Preparing_id;
+		std::deque<DeferredRequest> Requests;
+	};
+	LazyState lazy;
+	uint64_t lazy_offloaded_pages = 0, lazy_copied_pages = 0;
+	uint64_t lazy_deadline_drains = 0, lazy_cold_write_drains = 0;
+	void Lazy_start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory, sim_time_type now);
+	InterceptResult Lazy_intercept(SSD_Components::User_Request* request,
+		const std::vector<uint64_t>& zones, ZoneDirectory& directory, sim_time_type now);
+	void Lazy_poll(ZoneDirectory& directory, const SubmitCopyFunction& submit,
+		const DiscardFunction& discard, sim_time_type now);
+	bool Lazy_copy_completed(const io_request_id_type& id);
+	StripeCopyPlan Lazy_page_plan(const ZoneDirectory& directory, unsigned int page) const;
+	bool Lazy_prepare_page(ZoneDirectory& directory, unsigned int page);
+	std::vector<unsigned int> Lazy_request_pages(const SSD_Components::User_Request* request,
+		const ZoneDirectory& directory, bool full_only = false) const;
+	bool Lazy_touches_cold(const SSD_Components::User_Request* request, const ZoneDirectory& directory) const;
 	enum class TaskState {
 		IDLE,
 		GRABBING,

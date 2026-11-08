@@ -1,5 +1,7 @@
 # MQSim: A Simulator for Modern NVMe and SATA SSDs
 
+**TEC / PWL lazy zone migration experiment:** see [the implementation and run guide](docs/tec-lazy-zone-migration.md) for the professor's RAID0 policy, the `ON_DEMAND` mode, ready-to-edit trace settings, and reproducible validation. This branch builds on `experiment/tec-swans-src-only`; the separate GREEDY/wrap error patch is not included.
+
 MQSim is a simulator that accurately captures the behavior of both modern multi-queue SSDs and conventional SATA-based SSDs. MQSim faithfully models a number of critical features absent in existing state-of-the-art simulators, including (1) modern multi-queue-based host–interface protocols (e.g., NVMe), (2) the steady-state behavior of SSDs, and (3) the end-to-end latency of I/O requests. MQSim can be run as a standalone tool, or integrated with a full-system simulator.
 
 The full paper is published in FAST 2018 and is available online at https://people.inf.ethz.ch/omutlu/pub/MQSim-SSD-simulation-framework_fast18.pdf

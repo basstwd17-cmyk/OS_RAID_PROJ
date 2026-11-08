@@ -63,6 +63,9 @@ public:
 	uint64_t Zone_valid_sectors(uint64_t zone_id) const;
 	double Zone_valid_ratio(uint64_t zone_id) const;
 	uint64_t Zone_copy_sectors(uint64_t zone_id) const;
+	// Contiguous valid sector runs within a page; offsets are relative to that page.
+	std::vector<std::pair<unsigned int, unsigned int>> Valid_sector_runs(stream_id_type stream,
+		uint64_t zone, uint64_t offset, unsigned int count) const;
 	// Track logical data separately from write popularity (reads can initialize data).
 	void Observe_data(stream_id_type stream_id, uint64_t zone_id, uint64_t offset, unsigned int sectors);
 	uint64_t Duplicate_physical_location_count() const;

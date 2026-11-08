@@ -480,6 +480,7 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 	xmlwriter.Write_attribute_string(attr, val);
 
 	Flash_Parameters.XML_serialize(xmlwriter);
+	xmlwriter.Write_attribute_string("SWANS_Migration_Mode", SWANS_Migration_Mode);
 	xmlwriter.Write_attribute_string("RAID_Telemetry_Enabled", RAID_Telemetry_Enabled ? "true" : "false");
 	xmlwriter.Write_attribute_string("RAID_Telemetry_Period", std::to_string(RAID_Telemetry_Period));
 
@@ -810,6 +811,8 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 			} else if (strcmp(param->name(), "SWANS_Epoch_Migration") == 0) {
 				std::string val = param->value();
 				SWANS_Epoch_Migration = std::stoull(val);
+			} else if (strcmp(param->name(), "SWANS_Migration_Mode") == 0) {
+				if (!Set_swans_parameter(param->name(), param->value(), *this)) throw std::invalid_argument("Invalid migration mode");
 			} else if (strcmp(param->name(), "SWANS_Migration_Trigger") == 0) {
 				SWANS_Migration_Trigger = param->value();
 			} else if (strcmp(param->name(), "SWANS_Zone_Selection") == 0) {

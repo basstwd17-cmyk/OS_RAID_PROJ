@@ -73,6 +73,22 @@ namespace {
 RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_Parameter_Set*>* io_flows)
 	: MQSimEngine::Sim_Object("RAIDDevice")
 {
+	const bool on_demand = parameters->SWANS_Migration_Mode == "ON_DEMAND";
+	if (parameters->SWANS_Migration_Mode != "EAGER" && !on_demand)
+		throw std::invalid_argument("Invalid SWANS_Migration_Mode");
+	if (on_demand) {
+		const uint64_t page = parameters->Flash_Parameters.Page_Capacity / SECTOR_SIZE_IN_BYTE;
+		const uint64_t zone = parameters->SWANS_Zone_Size_LBA ? parameters->SWANS_Zone_Size_LBA
+			: static_cast<uint64_t>(parameters->Stripe_Unit_LBA) * parameters->Zone_Stripe_Multiplier;
+		if (!parameters->SWANS_Enabled || parameters->Enabled_Preconditioning || parameters->SSD_Count < 2 || io_flows->size() != 1
+			|| parameters->Address_Mapping != SSD_Components::Flash_Address_Mapping_Type::PAGE_LEVEL
+			|| io_flows->front()->Device_Level_Data_Caching_Mode != SSD_Components::Caching_Mode::TURNED_OFF
+			|| !page || !zone || zone != parameters->Stripe_Unit_LBA || zone % page
+			|| parameters->SWANS_Max_Concurrent_Migrations != 1 || !parameters->SWANS_Epoch_Migration
+			|| parameters->SWANS_Wear_Metric != "TEC" || parameters->SWANS_Migration_Trigger != "DYNAMIC_WEAR"
+			|| parameters->SWANS_Zone_Selection != "SSD_POPULARITY")
+			throw std::invalid_argument("ON_DEMAND requires TEC/DYNAMIC_WEAR/SSD_POPULARITY, preconditioning off, RAID0 >=2 SSDs, one flow, PAGE_LEVEL, cache off, stripe=zone aligned to pages, concurrency=1 and positive period");
+	}
 	if (parameters->SWANS_Reserve_Zone_Enabled) {
 		if (!parameters->SWANS_Enabled) throw std::invalid_argument("Reserve zones require SWANS_Enabled=true");
 		if (io_flows->size() != 1) throw std::invalid_argument("Reserve exchange currently requires one I/O flow (one backend address domain)");
@@ -126,7 +142,7 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 	// MQSim initializes unmapped pages on read. Reading whole erase blocks
 	// would therefore create new data in unused pages during migration.
 	// Reserve exchange tracks/copies touched pages, never untouched pages.
-	if (parameters->SWANS_Reserve_Zone_Enabled) zone_block_lba = static_cast<unsigned int>(page_lba_count);
+	if (parameters->SWANS_Reserve_Zone_Enabled || on_demand) zone_block_lba = static_cast<unsigned int>(page_lba_count);
 
 	raid_controller = new RAID_Controller(ID() + ".RAIDController", nullptr, (unsigned int)io_flows->size(), ssd_count,
 		parameters->Stripe_Unit_LBA,
@@ -147,6 +163,8 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 	raid_controller->Configure_zone_popularity(parameters->SWANS_Zone_Popularity_Mode,
 		parameters->SWANS_Zone_Popularity_Period);
 	RAID_Policy::MigrationLimits limits;
+	limits.On_demand = on_demand;
+	limits.Period = parameters->SWANS_Epoch_Migration;
 	limits.Slice_time = parameters->SWANS_Migration_Slice_Time;
 	limits.Slice_sectors = parameters->SWANS_Migration_Slice_Sectors;
 	limits.Pause_duration = parameters->SWANS_Migration_Pause_Duration;

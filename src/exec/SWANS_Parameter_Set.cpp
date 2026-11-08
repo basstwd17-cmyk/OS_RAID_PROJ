@@ -38,6 +38,10 @@ bool Set_swans_parameter(const std::string& key, const std::string& value, Devic
 	// Public name for the hidden-zone, two-stage migration path. Keep the
 	// earlier reserve-zone option as an alias for existing experiment files.
 	if (key == "op_zone_migration") { p.SWANS_Reserve_Zone_Enabled = boolean(value); return true; }
+	if (key == "SWANS_Migration_Mode") {
+		if (value != "EAGER" && value != "ON_DEMAND") throw std::invalid_argument("Invalid SWANS_Migration_Mode");
+		p.SWANS_Migration_Mode = value; return true;
+	}
 #define BOOL(field) if (key == #field) { p.field = boolean(value); return true; }
 #define UINT(field) if (key == #field) { p.field = number(value, std::numeric_limits<unsigned int>::max()); return true; }
 #define U64(field) if (key == #field) { p.field = number(value); return true; }
@@ -70,7 +74,7 @@ bool Set_swans_parameter(const std::string& key, const std::string& value, Devic
 	if (key == "SWANS_Migration_Trigger") { p.SWANS_Migration_Trigger = value; return true; }
 	if (key == "SWANS_Zone_Selection") { p.SWANS_Zone_Selection = value; return true; }
 	if (key == "SWANS_Zone_Popularity_Mode") {
-		if (value != "HALF_DECAY" && value != "LAST_EPOCH") throw std::invalid_argument("Invalid popularity mode: " + value);
+		if (value != "HALF_DECAY" && value != "LAST_EPOCH" && value != "HALF_EPOCH") throw std::invalid_argument("Invalid popularity mode: " + value);
 		p.SWANS_Zone_Popularity_Mode = value; return true;
 	}
 	return false;

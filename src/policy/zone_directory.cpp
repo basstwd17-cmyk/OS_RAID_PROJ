@@ -382,8 +382,8 @@ bool ZoneDirectory::Is_reserved(uint64_t zone_id, const std::vector<uint64_t>& r
 
 void ZoneDirectory::Configure_popularity(const std::string& mode, sim_time_type period)
 {
-	if ((mode != "HALF_DECAY" && mode != "LAST_EPOCH") || (mode == "LAST_EPOCH" && period == 0))
-		throw std::invalid_argument("Popularity requires HALF_DECAY or LAST_EPOCH; LAST_EPOCH requires a positive period");
+	if ((mode != "HALF_DECAY" && mode != "LAST_EPOCH" && mode != "HALF_EPOCH") || (mode != "HALF_DECAY" && period == 0))
+		throw std::invalid_argument("Popularity requires HALF_DECAY, HALF_EPOCH or LAST_EPOCH and a positive epoch period");
 	popularity_mode = mode;
 	popularity_period = period;
 	popularity_epoch = 0;
@@ -397,7 +397,9 @@ void ZoneDirectory::Advance_popularity(sim_time_type now)
 	if (epoch <= popularity_epoch) return;
 	const uint64_t elapsed = epoch - popularity_epoch;
 	for (auto& zone : zones) {
-		zone.Popularity = elapsed == 1 ? static_cast<double>(zone.Epoch_write_sectors) : 0.0;
+		zone.Popularity = popularity_mode == "HALF_EPOCH"
+			? std::ldexp(zone.Popularity + static_cast<double>(zone.Epoch_write_sectors), -static_cast<int>(std::min<uint64_t>(elapsed, 1075)))
+			: (elapsed == 1 ? static_cast<double>(zone.Epoch_write_sectors) : 0.0);
 		zone.Epoch_write_sectors = 0;
 	}
 	popularity_epoch = epoch;
@@ -412,7 +414,7 @@ void ZoneDirectory::On_migration_completed()
 double ZoneDirectory::Zone_popularity(uint64_t zone_id) const
 {
 	Validate_zone_id(zone_id);
-	return zones[zone_id].Popularity;
+	return zones[zone_id].Popularity + (popularity_mode == "HALF_EPOCH" ? zones[zone_id].Epoch_write_sectors : 0.0);
 }
 
 uint64_t ZoneDirectory::Zone_valid_sectors(uint64_t zone_id) const
@@ -437,6 +439,23 @@ uint64_t ZoneDirectory::Zone_copy_sectors(uint64_t zone_id) const
 		for (size_t block = 0; block < stream.second.size(); ++block)
 			if (stream.second[block]) sectors += std::min<uint64_t>(block_unit_lba, zone_size_lba - block * block_unit_lba);
 	return sectors;
+}
+
+std::vector<std::pair<unsigned int, unsigned int>> ZoneDirectory::Valid_sector_runs(stream_id_type stream,
+	uint64_t zone, uint64_t offset, unsigned int count) const
+{
+	Validate_zone_id(zone);
+	if (offset > zone_size_lba || count > zone_size_lba - offset) throw std::out_of_range("Invalid page range");
+	std::vector<std::pair<unsigned int, unsigned int>> result;
+	const auto found = zones[zone].Valid_sectors_by_stream.find(stream);
+	if (found == zones[zone].Valid_sectors_by_stream.end()) return result;
+	for (unsigned int i = 0; i < count;) {
+		if (!found->second[offset + i]) { ++i; continue; }
+		const unsigned int first = i;
+		while (i < count && found->second[offset + i]) ++i;
+		result.push_back(std::make_pair(first, i - first));
+	}
+	return result;
 }
 
 bool ZoneDirectory::Is_full_physical_zone(const ZoneEntry& zone) const
@@ -476,10 +495,11 @@ uint64_t ZoneDirectory::Find_hottest_used_zone_on_ssd(unsigned int ssd_id, const
 			continue;
 		}
 		const uint64_t cost = Zone_copy_sectors(zone_id);
-		if (selected == INVALID_ZONE_ID || zone.Popularity > best
-			|| (zone.Popularity == best && cost < best_cost)) {
+		const double heat = Zone_popularity(zone_id);
+		if (selected == INVALID_ZONE_ID || heat > best
+			|| (heat == best && cost < best_cost)) {
 			selected = zone_id;
-			best = zone.Popularity;
+			best = heat;
 			best_cost = cost;
 		}
 	}
@@ -492,8 +512,10 @@ uint64_t ZoneDirectory::Find_coldest_used_zone_on_ssd(unsigned int ssd_id, const
 	for (uint64_t z = 0; z < zone_count; ++z) {
 		const auto& zone = zones[z];
 		if (zone.Reserve || zone.Empty || zone.Migrating || Is_reserved(z, reserved) || zone.Physical_ssd != ssd_id) continue;
-		if (selected == INVALID_ZONE_ID || zone.Popularity < zones[selected].Popularity
-			|| (zone.Popularity == zones[selected].Popularity && Zone_copy_sectors(z) < Zone_copy_sectors(selected)))
+		if (selected == INVALID_ZONE_ID || Zone_popularity(z) < Zone_popularity(selected)
+			|| (Zone_popularity(z) == Zone_popularity(selected)
+				&& (Zone_valid_sectors(z) < Zone_valid_sectors(selected)
+					|| (Zone_valid_sectors(z) == Zone_valid_sectors(selected) && Zone_copy_sectors(z) < Zone_copy_sectors(selected)))))
 			selected = z;
 	}
 	return selected;
@@ -507,9 +529,12 @@ uint64_t ZoneDirectory::Find_migration_zone(unsigned int ssd, bool global, bool 
 		const auto& zone = zones[z];
 		if (zone.Reserve || zone.Empty || zone.Migrating || Is_reserved(z, reserved)
 			|| (!global && Owner_ssd(z) != ssd)) continue;
-		if (selected == INVALID_ZONE_ID || (cumulative
-			? zone.Written_sectors > zones[selected].Written_sectors
-			: zone.Popularity > zones[selected].Popularity)) selected = z;
+		const double score = cumulative ? static_cast<double>(zone.Written_sectors) : Zone_popularity(z);
+		const double best = selected == INVALID_ZONE_ID ? -1 : (cumulative
+			? static_cast<double>(zones[selected].Written_sectors) : Zone_popularity(selected));
+		if (selected == INVALID_ZONE_ID || score > best || (!cumulative && score == best
+			&& (Zone_valid_sectors(z) < Zone_valid_sectors(selected)
+				|| (Zone_valid_sectors(z) == Zone_valid_sectors(selected) && Zone_copy_sectors(z) < Zone_copy_sectors(selected))))) selected = z;
 	}
 	return selected; // equal scores: smallest logical zone ID
 }
