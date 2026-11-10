@@ -32,7 +32,7 @@ namespace SSD_Components
 		for (unsigned int die_id = 0; die_id < die_no_per_chip; die_id++) {
 			for (unsigned int plane_id = 0; plane_id < plane_no_per_die; plane_id++) {
 				addr.DieID = die_id; addr.PlaneID = plane_id;
-				if (block_manager->Get_pool_size(addr) < block_pool_gc_hard_threshold)
+				if (block_manager->Get_pool_size(addr) < Get_gc_hard_threshold_for_plane(addr))
 					return true;
 			}
 		}
@@ -42,7 +42,7 @@ namespace SSD_Components
 
 	void GC_and_WL_Unit_Page_Level::Check_gc_required(const unsigned int free_block_pool_size, const NVM::FlashMemory::Physical_Page_Address& plane_address)
 	{
-		if (free_block_pool_size < block_pool_gc_threshold) {
+		if (free_block_pool_size < Get_gc_threshold_for_plane(plane_address)) {
 			flash_block_ID_type gc_candidate_block_id = block_no_per_plane;
 			PlaneBookKeepingType* pbke = block_manager->Get_plane_bookkeeping_entry(plane_address);
 			auto eligible = [&](flash_block_ID_type id, bool full, unsigned int invalid_min) {

@@ -1,5 +1,14 @@
 #include "GC_and_WL_Unit_Base.h"
 #include "Device_Lifecycle_Monitor.h"
+#include <algorithm>
+
+namespace {
+	unsigned int threshold_for_blocks(unsigned int usable_blocks, double ratio, unsigned int minimum)
+	{
+		// Preserve the existing truncation and minimum-threshold rules.
+		return std::max(minimum, static_cast<unsigned int>(ratio * static_cast<double>(usable_blocks)));
+	}
+}
 
 namespace SSD_Components
 {
@@ -17,18 +26,7 @@ namespace SSD_Components
 		block_no_per_plane(block_no_per_plane), pages_no_per_block(page_no_per_block), sector_no_per_page(sector_no_per_page),
 		dynamic_wearleveling_enabled(dynamic_wearleveling_enabled), static_wearleveling_enabled(static_wearleveling_enabled), static_wearleveling_threshold(static_wearleveling_threshold)
 	{
-		block_pool_gc_threshold = (unsigned int)(gc_threshold * (double)block_no_per_plane);
-		if (block_pool_gc_threshold < 1) {
-			block_pool_gc_threshold = 1;
-		}
-		block_pool_gc_hard_threshold = (unsigned int)(gc_hard_threshold * (double)block_no_per_plane);
-		if (block_pool_gc_hard_threshold < 1) {
-			block_pool_gc_hard_threshold = 1;
-		}
 		random_pp_threshold = (unsigned int)(rho * pages_no_per_block);
-		if (block_pool_gc_threshold < max_ongoing_gc_reqs_per_plane) {
-			block_pool_gc_threshold = max_ongoing_gc_reqs_per_plane;
-		}
 	}
 
 	void GC_and_WL_Unit_Base::Setup_triggers()
@@ -219,10 +217,24 @@ namespace SSD_Components
 
 	unsigned int GC_and_WL_Unit_Base::Get_minimum_number_of_free_pages_before_GC()
 	{
-		return block_pool_gc_threshold;
-		/*if (preemptible_gc_enabled)
-			return block_pool_gc_hard_threshold;
-		else return block_pool_gc_threshold;*/
+		// Called only by startup preconditioning, before blocks can retire.
+		return threshold_for_blocks(block_no_per_plane, gc_threshold, std::max(1U, max_ongoing_gc_reqs_per_plane));
+	}
+
+	unsigned int GC_and_WL_Unit_Base::Get_gc_threshold_for_plane(const NVM::FlashMemory::Physical_Page_Address& plane_address) const
+	{
+		const PlaneBookKeepingType* plane = block_manager->Get_plane_bookkeeping_entry(plane_address);
+		// Retirement removes one whole block from Total_pages_count. This counts
+		// all usable blocks, allocated or free, without scanning block metadata.
+		const unsigned int usable_blocks = plane->Total_pages_count / pages_no_per_block;
+		return threshold_for_blocks(usable_blocks, gc_threshold, std::max(1U, max_ongoing_gc_reqs_per_plane));
+	}
+
+	unsigned int GC_and_WL_Unit_Base::Get_gc_hard_threshold_for_plane(const NVM::FlashMemory::Physical_Page_Address& plane_address) const
+	{
+		const PlaneBookKeepingType* plane = block_manager->Get_plane_bookkeeping_entry(plane_address);
+		const unsigned int usable_blocks = plane->Total_pages_count / pages_no_per_block;
+		return threshold_for_blocks(usable_blocks, gc_hard_threshold, 1U);
 	}
 
 	bool GC_and_WL_Unit_Base::Use_dynamic_wearleveling()

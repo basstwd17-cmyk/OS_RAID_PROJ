@@ -54,7 +54,10 @@ namespace SSD_Components
 		virtual void Check_gc_required(const unsigned int BlockPoolSize, const NVM::FlashMemory::Physical_Page_Address& planeAddress) = 0;
 		GC_Block_Selection_Policy_Type Get_gc_policy();
 		unsigned int Get_GC_policy_specific_parameter();//Returns the parameter specific to the GC block selection policy: threshold for random_pp, set_size for RGA
+		// Startup preconditioning uses the initial, unworn geometry only.
 		unsigned int Get_minimum_number_of_free_pages_before_GC();
+		unsigned int Get_gc_threshold_for_plane(const NVM::FlashMemory::Physical_Page_Address& plane_address) const;
+		unsigned int Get_gc_hard_threshold_for_plane(const NVM::FlashMemory::Physical_Page_Address& plane_address) const;
 		bool Use_dynamic_wearleveling();
 		bool Use_static_wearleveling();
 		bool Stop_servicing_writes(const NVM::FlashMemory::Physical_Page_Address& plane_address);
@@ -65,8 +68,7 @@ namespace SSD_Components
 		TSU_Base* tsu;
 		NVM_PHY_ONFI* flash_controller;
 		bool force_gc;
-		double gc_threshold;//As the ratio of free pages to the total number of physical pages
-		unsigned int block_pool_gc_threshold;
+		double gc_threshold;//Free-block threshold as a ratio of non-retired blocks in the target plane
 		void handle_transaction_serviced_signal_from_PHY(NVM_Transaction_Flash* transaction);
 		bool is_safe_gc_wl_candidate(const PlaneBookKeepingType* pbke, const flash_block_ID_type gc_wl_candidate_block_id);//Checks if block_address is a safe candidate for gc execution, i.e., 1) it is not a write frontier, and 2) there is no ongoing program operation
 		bool check_static_wl_required(const NVM::FlashMemory::Physical_Page_Address plane_address);
@@ -80,7 +82,6 @@ namespace SSD_Components
 		//Used to implement: "Preemptible I/O Scheduling of Garbage Collection for Solid State Drives", TCAD 2013.
 		bool preemptible_gc_enabled;
 		double gc_hard_threshold;
-		unsigned int block_pool_gc_hard_threshold;
 		unsigned int max_ongoing_gc_reqs_per_plane;//This value has two important usages: 1) maximum number of concurrent gc operations per plane, and 2) the value that determines urgent GC execution when there is a shortage of flash blocks. If the block bool size drops below this value, all incomming user writes should be blocked
 
 		//Following variabels are used based on the type of GC block selection policy
