@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<SWANS_Parameter_Set>
+  <SWANS_Enabled>true</SWANS_Enabled>
+  <SWANS_State_Evaluation>WRITE_STDDEV</SWANS_State_Evaluation>
+  <op_zone_migration>false</op_zone_migration>
+  <SWANS_Migration_Mode>ON_DEMAND</SWANS_Migration_Mode>
+  <SWANS_Zone_Size_LBA>32768</SWANS_Zone_Size_LBA>
+  <SWANS_Zone_Selection>SSD_POPULARITY</SWANS_Zone_Selection>
+  <SWANS_Epoch_Default>40000000000</SWANS_Epoch_Default>
+  <SWANS_Epoch_Placement>40000000000</SWANS_Epoch_Placement>
+  <SWANS_Epoch_Migration>40000000000</SWANS_Epoch_Migration>
+  <SWANS_Max_Concurrent_Migrations>1</SWANS_Max_Concurrent_Migrations>
+  <SWANS_Migration_Working_Queue_Limit>64</SWANS_Migration_Working_Queue_Limit>
+  <SWANS_Balance_Unit_Bytes>1048576</SWANS_Balance_Unit_Bytes>
+  <SWANS_TH_Precautionary>8</SWANS_TH_Precautionary>
+  <SWANS_TH_Critical>32</SWANS_TH_Critical>
+  <SWANS_TEC_TH_Precautionary_PctPoint>5</SWANS_TEC_TH_Precautionary_PctPoint>
+  <SWANS_TEC_TH_Critical_PctPoint>10</SWANS_TEC_TH_Critical_PctPoint>
+  <SWANS_Zone_Popularity_Mode>HALF_EPOCH</SWANS_Zone_Popularity_Mode>
+  <SWANS_Zone_Popularity_Period>40000000000</SWANS_Zone_Popularity_Period>
+</SWANS_Parameter_Set>

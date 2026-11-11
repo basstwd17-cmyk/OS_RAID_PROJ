@@ -28,7 +28,11 @@ public:
 	void Configure_metric(const std::string& metric, const std::string& trigger,
 		const std::string& selection, double precautionary, double critical);
 	void Update_wear(const WearSnapshot& wear);
-	void Require_single_zone_epochs() { max_concurrent_migrations = 1; migration_only = true; }
+	void Require_single_zone_epochs() { max_concurrent_migrations = 1; }
+	const char* Evaluation_name() const {
+		return metric == "TEC" ? (trigger == "DYNAMIC_WEAR" ? "TEC_PWL" : "TEC_STDDEV")
+			: (metric == "WRITE_BYTES" && trigger == "IMBALANCE" ? "WRITE_STDDEV" : "LEGACY");
+	}
 	const std::string& Metric() const { return metric; }
 	const std::string& Trigger() const { return trigger; }
 	const std::string& Selection() const { return selection; }
@@ -59,7 +63,6 @@ private:
 	WearSnapshot live_wear;
 	double Metric_value(unsigned int i) const;
 	bool initialized;
-	bool migration_only = false;
 	unsigned int ssd_count;
 	double th_precautionary_write_units;
 	double th_critical_write_units;

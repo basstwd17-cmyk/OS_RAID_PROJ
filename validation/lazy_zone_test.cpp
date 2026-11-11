@@ -138,6 +138,42 @@ void popularity_and_policy() {
     wear.Values={.75,.25};assert(p.Evaluate(d,wear).Migrations.empty()); // strict >
 }
 
+void independent_state_and_space_options() {
+    // Executor concurrency must not disable the three SWANS states.
+    ZoneDirectory d;d.Initialize(2,16,16,8,64,true,48);
+    d.Configure_popularity("HALF_EPOCH",10);d.Observe_write(0,0,8,true);
+    WearLevelingPolicy writes;writes.Initialize(2,5,10,8,1);
+    writes.Require_single_zone_epochs();
+    writes.Configure_metric("WRITE_BYTES","IMBALANCE","SSD_POPULARITY",-1,-1);
+    assert(writes.Evaluate(d,{}).State==PolicyState::NORMAL);
+    writes.Observe_host_write(0,8);assert(writes.Evaluate(d,{}).State==PolicyState::NORMAL);
+    writes.Observe_host_write(0,2);auto redirect=writes.Evaluate(d,{});
+    assert(redirect.State==PolicyState::REDIRECT && redirect.Redirect.Valid && redirect.Mu==5);
+    writes.Observe_host_write(0,10);auto migration=writes.Evaluate(d,{});
+    assert(migration.State==PolicyState::MIGRATION && migration.Mu==10);
+    assert(migration.Migrations.size()==1 && migration.Migrations[0].Reserve_zone==INVALID_ZONE_ID);
+
+    WearLevelingPolicy tec;tec.Initialize(2,1,2,8,1);tec.Require_single_zone_epochs();
+    tec.Configure_metric("TEC","DYNAMIC_WEAR","SSD_POPULARITY",5,10);
+    tec.Observe_host_write(1,1000000); // TEC decisions must ignore write-byte ordering.
+    WearSnapshot wear;wear.Values={.3,.3};assert(tec.Evaluate(d,wear).State==PolicyState::NORMAL);
+    wear.Values={.6,.2};redirect=tec.Evaluate(d,wear);
+    assert(redirect.State==PolicyState::REDIRECT && redirect.Redirect.Hot_ssd==0);
+    wear.Values={.75,.25};assert(tec.Evaluate(d,wear).State==PolicyState::REDIRECT);
+    wear.Values={.76,.24};migration=tec.Evaluate(d,wear);
+    assert(migration.State==PolicyState::MIGRATION && migration.Migrations.size()==1);
+    assert(migration.Migrations[0].Reserve_zone==INVALID_ZONE_ID); // ordinary empty first
+    d.Observe_write(1,0,8,true);d.Observe_write(3,0,8,true); // fill youngest SSD
+    migration=tec.Evaluate(d,wear);
+    assert(migration.Migrations.size()==1 && migration.Migrations[0].Reserve_zone!=INVALID_ZONE_ID);
+    assert(d.Is_reserve_zone(migration.Migrations[0].Reserve_zone));
+
+    ZoneDirectory no_reserve;no_reserve.Initialize(2,16,16,8,64,false,32);
+    no_reserve.Configure_popularity("HALF_EPOCH",10);
+    for(unsigned z=0;z<4;++z)no_reserve.Observe_write(z,0,8,true);
+    assert(tec.Evaluate(no_reserve,wear).Migrations.empty());
+}
+
 void queue_and_abort() {
     Fixture f(false);f.step(101);unsigned callbacks=0;
     f.e.Task_finished=[&](uint64_t,bool aborted){assert(aborted);++callbacks;};
@@ -170,4 +206,4 @@ void cross_page_updates() {
     g.finish(200);assert(g.e.Lazy_deadline_drains()==1);
 }
 
-int main(){normal_lazy();exchange_and_deadline();cold_write_forces_completion();popularity_and_policy();queue_and_abort();empty_destination_read_waits();cross_page_updates();std::cout<<"lazy migration unit tests passed\n";}
+int main(){normal_lazy();exchange_and_deadline();cold_write_forces_completion();popularity_and_policy();independent_state_and_space_options();queue_and_abort();empty_destination_read_waits();cross_page_updates();std::cout<<"lazy migration unit tests passed\n";}

@@ -1,4 +1,5 @@
 #include "RAID_Device.h"
+#include "SWANS_Parameter_Set.h"
 #include <cmath>
 #include <limits>
 #include <map>
@@ -73,6 +74,7 @@ namespace {
 RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_Parameter_Set*>* io_flows)
 	: MQSimEngine::Sim_Object("RAIDDevice")
 {
+	Resolve_swans_state_evaluation(*parameters);
 	const bool on_demand = parameters->SWANS_Migration_Mode == "ON_DEMAND";
 	if (parameters->SWANS_Migration_Mode != "EAGER" && !on_demand)
 		throw std::invalid_argument("Invalid SWANS_Migration_Mode");
@@ -84,10 +86,8 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 			|| parameters->Address_Mapping != SSD_Components::Flash_Address_Mapping_Type::PAGE_LEVEL
 			|| io_flows->front()->Device_Level_Data_Caching_Mode != SSD_Components::Caching_Mode::TURNED_OFF
 			|| !page || !zone || zone != parameters->Stripe_Unit_LBA || zone % page
-			|| parameters->SWANS_Max_Concurrent_Migrations != 1 || !parameters->SWANS_Epoch_Migration
-			|| parameters->SWANS_Wear_Metric != "TEC" || parameters->SWANS_Migration_Trigger != "DYNAMIC_WEAR"
-			|| parameters->SWANS_Zone_Selection != "SSD_POPULARITY")
-			throw std::invalid_argument("ON_DEMAND requires TEC/DYNAMIC_WEAR/SSD_POPULARITY, preconditioning off, RAID0 >=2 SSDs, one flow, PAGE_LEVEL, cache off, stripe=zone aligned to pages, concurrency=1 and positive period");
+			|| parameters->SWANS_Max_Concurrent_Migrations != 1 || !parameters->SWANS_Epoch_Migration)
+			throw std::invalid_argument("ON_DEMAND requires preconditioning off, RAID0 >=2 SSDs, one flow, PAGE_LEVEL, cache off, stripe=zone aligned to pages, concurrency=1 and positive period");
 	}
 	if (parameters->SWANS_Reserve_Zone_Enabled) {
 		if (!parameters->SWANS_Enabled) throw std::invalid_argument("Reserve zones require SWANS_Enabled=true");

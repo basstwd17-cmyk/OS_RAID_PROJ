@@ -66,7 +66,8 @@ public:
 	unsigned int Stripe_Unit_LBA; // Stripe unit size in LBA units
 	bool SWANS_Enabled;
 	bool SWANS_Reserve_Zone_Enabled = false; // XML: op_zone_migration (legacy name remains supported)
-	std::string SWANS_Migration_Mode = "EAGER"; // EAGER or ON_DEMAND (one zone, fixed period)
+	std::string SWANS_Migration_Mode = "EAGER"; // Independent executor: EAGER or ON_DEMAND
+	std::string SWANS_State_Evaluation = "LEGACY"; // WRITE_STDDEV / TEC_PWL; LEGACY preserves metric/trigger XML
 	sim_time_type SWANS_Migration_Slice_Time = 0;
 	uint64_t SWANS_Migration_Slice_Sectors = 0;
 	sim_time_type SWANS_Migration_Pause_Duration = 1000000;

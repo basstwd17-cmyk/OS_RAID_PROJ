@@ -440,6 +440,7 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 
 	attr = "SWANS_TH_Precautionary";
 	xmlwriter.Write_attribute_string("SWANS_Wear_Metric", SWANS_Wear_Metric);
+	xmlwriter.Write_attribute_string("SWANS_State_Evaluation", SWANS_State_Evaluation);
 	xmlwriter.Write_attribute_string("SWANS_Migration_Trigger", SWANS_Migration_Trigger);
 	xmlwriter.Write_attribute_string("SWANS_Zone_Selection", SWANS_Zone_Selection);
 	xmlwriter.Write_attribute_string("SWANS_TEC_TH_Precautionary_PctPoint", std::to_string(SWANS_TEC_TH_Precautionary_PctPoint));
@@ -811,7 +812,8 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 			} else if (strcmp(param->name(), "SWANS_Epoch_Migration") == 0) {
 				std::string val = param->value();
 				SWANS_Epoch_Migration = std::stoull(val);
-			} else if (strcmp(param->name(), "SWANS_Migration_Mode") == 0) {
+			} else if (strcmp(param->name(), "SWANS_Migration_Mode") == 0
+				|| strcmp(param->name(), "SWANS_State_Evaluation") == 0) {
 				if (!Set_swans_parameter(param->name(), param->value(), *this)) throw std::invalid_argument("Invalid migration mode");
 			} else if (strcmp(param->name(), "SWANS_Migration_Trigger") == 0) {
 				SWANS_Migration_Trigger = param->value();

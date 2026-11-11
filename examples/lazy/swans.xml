@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <SWANS_Parameter_Set>
   <SWANS_Enabled>true</SWANS_Enabled>
+  <SWANS_State_Evaluation>TEC_PWL</SWANS_State_Evaluation>
   <SWANS_Migration_Mode>ON_DEMAND</SWANS_Migration_Mode>
   <op_zone_migration>true</op_zone_migration>
   <SWANS_Wear_Metric>TEC</SWANS_Wear_Metric>
@@ -15,7 +16,7 @@
   <SWANS_Zone_Popularity_Mode>HALF_EPOCH</SWANS_Zone_Popularity_Mode>
   <SWANS_Zone_Popularity_Period>40000000000</SWANS_Zone_Popularity_Period>
   <!-- Required TEC configuration fields. DYNAMIC_WEAR uses the PWL formula,
-       not these imbalance thresholds. Redirect is disabled in ON_DEMAND. -->
+       not the critical imbalance threshold. Redirect uses precautionary. -->
   <SWANS_TEC_TH_Precautionary_PctPoint>5</SWANS_TEC_TH_Precautionary_PctPoint>
   <SWANS_TEC_TH_Critical_PctPoint>10</SWANS_TEC_TH_Critical_PctPoint>
 </SWANS_Parameter_Set>

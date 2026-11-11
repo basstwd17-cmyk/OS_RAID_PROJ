@@ -1286,6 +1286,9 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 
 	xmlwriter.Write_attribute_string("SWANS_Enabled", swans_enabled ? "true" : "false");
 	xmlwriter.Write_attribute_string("SWANS_State", swans_state_to_string(swans_policy_state));
+	xmlwriter.Write_attribute_string("SWANS_State_Evaluation", wear_leveling_policy.Evaluation_name());
+	xmlwriter.Write_attribute_string("SWANS_Redirect_Enabled", swans_enabled ? "true" : "false");
+	xmlwriter.Write_attribute_string("SWANS_Extra_Zone_Enabled", zone_directory.Zone_count() > zone_directory.User_zone_count() ? "true" : "false");
 	xmlwriter.Write_attribute_string("SWANS_Migration_Mode", migration_executor.On_demand() ? "ON_DEMAND" : "EAGER");
 	xmlwriter.Write_attribute_string("SWANS_Migration_Fixed_Period", migration_executor.On_demand() ? std::to_string(swans_epoch_migration) : "0");
 	xmlwriter.Write_attribute_string("SWANS_Lazy_Offloaded_Pages", std::to_string(migration_executor.Lazy_offloaded_pages()));
@@ -1293,9 +1296,8 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 	xmlwriter.Write_attribute_string("SWANS_Lazy_Deadline_Drains", std::to_string(migration_executor.Lazy_deadline_drains()));
 	xmlwriter.Write_attribute_string("SWANS_Lazy_Cold_Write_Drains", std::to_string(migration_executor.Lazy_cold_write_drains()));
 	xmlwriter.Write_attribute_string("SWANS_Lazy_Remaining_Pages", std::to_string(migration_executor.Lazy_remaining_pages()));
-	// Mu is calculated from observed host and completed migration bytes normalized by
-	// SWANS_Balance_Unit_Bytes; keep the exported label aligned with the metric.
-	xmlwriter.Write_attribute_string("SWANS_Mu_Unit", "write_bytes_normalized_by_balance_unit");
+	xmlwriter.Write_attribute_string("SWANS_Mu_Unit", wear_leveling_policy.Metric() == "TEC"
+		? "percent_points" : "write_bytes_normalized_by_balance_unit");
 	xmlwriter.Write_attribute_string("SWANS_Last_Mu", std::to_string(swans_stats.Last_mu));
 	xmlwriter.Write_attribute_string(wear_leveling_policy.Metric() == "TEC" ? "SWANS_Final_Mu_PctPoint" : "SWANS_Final_Mu_SDW", std::to_string(wear_leveling_policy.Current_mu()));
 	xmlwriter.Write_attribute_string("SWANS_Epoch_Evaluations", std::to_string(swans_stats.Epoch_evaluations));

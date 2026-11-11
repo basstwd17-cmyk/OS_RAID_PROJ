@@ -234,7 +234,7 @@ PolicyDecision WearLevelingPolicy::Evaluate(const ZoneDirectory& directory, cons
 		const unsigned int write_cold = Pick_coldest_ssd();
 		decision.State = PolicyState::NORMAL;
 		decision.Redirect.Valid = false;
-		if (!migration_only && write_hot != write_cold && decision.Mu >= th_precautionary_write_units) {
+		if (write_hot != write_cold && decision.Mu >= th_precautionary_write_units) {
 			decision.State = PolicyState::REDIRECT;
 			decision.Redirect.Valid = true;
 			decision.Redirect.Hot_ssd = write_hot;

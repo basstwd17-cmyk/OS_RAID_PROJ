@@ -38,6 +38,11 @@ bool Set_swans_parameter(const std::string& key, const std::string& value, Devic
 	// Public name for the hidden-zone, two-stage migration path. Keep the
 	// earlier reserve-zone option as an alias for existing experiment files.
 	if (key == "op_zone_migration") { p.SWANS_Reserve_Zone_Enabled = boolean(value); return true; }
+	if (key == "SWANS_State_Evaluation") {
+		if (value != "LEGACY" && value != "WRITE_STDDEV" && value != "TEC_PWL")
+			throw std::invalid_argument("SWANS_State_Evaluation must be WRITE_STDDEV, TEC_PWL or LEGACY");
+		p.SWANS_State_Evaluation = value; return true;
+	}
 	if (key == "SWANS_Migration_Mode") {
 		if (value != "EAGER" && value != "ON_DEMAND") throw std::invalid_argument("Invalid SWANS_Migration_Mode");
 		p.SWANS_Migration_Mode = value; return true;
@@ -78,6 +83,24 @@ bool Set_swans_parameter(const std::string& key, const std::string& value, Devic
 		p.SWANS_Zone_Popularity_Mode = value; return true;
 	}
 	return false;
+}
+
+void Resolve_swans_state_evaluation(Device_Parameter_Set& p)
+{
+	if (p.SWANS_State_Evaluation == "LEGACY") return;
+	// The selector wins over low-level metric/trigger fields, regardless of XML order.
+	if (p.SWANS_State_Evaluation == "WRITE_STDDEV") {
+		p.SWANS_Wear_Metric = "WRITE_BYTES";
+		p.SWANS_Migration_Trigger = "IMBALANCE";
+		if (!std::isfinite(p.SWANS_TH_Precautionary) || !std::isfinite(p.SWANS_TH_Critical)
+			|| p.SWANS_TH_Precautionary < 0 || p.SWANS_TH_Critical <= p.SWANS_TH_Precautionary)
+			throw std::invalid_argument("WRITE_STDDEV requires 0 <= SWANS_TH_Precautionary < SWANS_TH_Critical");
+	} else if (p.SWANS_State_Evaluation == "TEC_PWL") {
+		p.SWANS_Wear_Metric = "TEC";
+		p.SWANS_Migration_Trigger = "DYNAMIC_WEAR";
+	} else {
+		throw std::invalid_argument("Invalid SWANS_State_Evaluation");
+	}
 }
 
 void Read_swans_configuration(const std::string& path, Device_Parameter_Set& parameters)

@@ -1,5 +1,7 @@
 # TEC / PWL 기반 RAID0 lazy zone migration
 
+상태 평가, extra zone, EAGER/ON_DEMAND를 독립적으로 선택하는 설정과 8개 예제는 [실험 옵션 안내](swans-policy-options.md)를 참고한다. ON_DEMAND에서도 REDIRECT를 지원한다.
+
 이 브랜치는 `experiment/tec-swans-src-only`의 `aba1b9d`를 기준으로 교수님이 제안한 RAID0 정책의 남은 경로를 구현한다. `professor/greedy-circular-wrap-error`의 별도 오류 수정 커밋은 합치지 않았다. 기본 `ssdconfig.xml`, `workload.xml`과 EAGER 경로는 유지하며 새 정책은 `SWANS_Migration_Mode=ON_DEMAND`로 선택한다.
 
 ## 요구사항과 구현 범위
@@ -8,7 +10,7 @@
 |---|---|---|
 | TEC와 PWL 형태 트리거 | 구현됨 | 재사용: `Wear_i > (Wear_avg + 1) / 2` |
 | zone 기반 RAID0 striping | stripe/zone 크기가 달라도 허용 | ON_DEMAND에서 stripe = zone을 검증 |
-| 고정 migration 주기, 주기당 한 존 | 상태에 따른 평가 주기, 설정 가능한 동시 개수 | 고정 시간축, 한 hot 존 작업만 허용, redirect 비활성화 |
+| 고정 migration 주기, 주기당 한 존 | 상태에 따른 평가 주기, 설정 가능한 동시 개수 | 고정 시간축, 한 hot 존 작업만 허용, 상태 평가는 실행 방식과 독립 |
 | 가장 old SSD의 hottest zone -> youngest SSD의 empty zone | 구현됨 | 재사용, heat 동점에서는 유효 데이터량/복사량이 작은 후보 우선 |
 | 빈 zone이 없으면 SSD별 숨겨진 OP zone | 구현됨 | 재사용: SSD당 사용자 zone 하나 제외 |
 | cold -> old SSD의 OP 역방향 | 일괄 복사 | 유효 sector만 즉시 복사하고 무효화 완료를 기다림 |
@@ -42,7 +44,7 @@ Linux에서는 같은 인수로 `make -j4` 후 `./MQSim`을 사용한다. Linux�
 
 기본 overlay는 16 MiB stripe = zone, TEC/DYNAMIC_WEAR, 40초 고정 주기, 한 존, OP zone 사용, HALF_EPOCH를 선택한다. root SSD의 PE25는 가속 실험값이며 상용 SSD 내구성을 뜻하지 않는다. 다수의 짧은 trace는 마모가 트리거까지 진행되지 않으므로 migration이 0회일 수 있다.
 
-ON_DEMAND는 SSD 2개 이상, 단일 flow, PAGE_LEVEL, preconditioning OFF, device cache OFF, page 정렬된 동일 stripe/zone, concurrency=1, 양수 고정 주기, TEC/DYNAMIC_WEAR/SSD_POPULARITY를 요구한다. 이번 경로의 초기 데이터는 trace의 실제 read/write로 등록한다. 잘못된 조합은 시작 전에 오류로 종료한다. 기본 XML과 EAGER 모드를 바꾸지 않았으므로 기존 실행은 기존 경로를 쓴다.
+ON_DEMAND는 SSD 2개 이상, 단일 flow, PAGE_LEVEL, preconditioning OFF, device cache OFF, page 정렬된 동일 stripe/zone, concurrency=1, 양수 고정 주기를 요구한다. 상태 평가는 WRITE_STDDEV 또는 TEC_PWL로 선택하며 두 모드 모두 NORMAL/REDIRECT/MIGRATION을 사용한다. 이번 경로의 초기 데이터는 trace의 실제 read/write로 등록한다. 잘못된 구조적 조합은 시작 전에 오류로 종료한다. 기본 XML과 EAGER 모드를 바꾸지 않았으므로 기존 실행은 기존 경로를 쓴다.
 
 설정:
 
