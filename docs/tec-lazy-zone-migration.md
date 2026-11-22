@@ -10,7 +10,7 @@
 |---|---|---|
 | TEC와 PWL 형태 트리거 | 구현됨 | 재사용: `Wear_i > (Wear_avg + 1) / 2` |
 | zone 기반 RAID0 striping | stripe/zone 크기가 달라도 허용 | ON_DEMAND에서 stripe = zone을 검증 |
-| 고정 migration 주기, 주기당 한 존 | 상태에 따른 평가 주기, 설정 가능한 동시 개수 | 고정 시간축, 한 hot 존 작업만 허용, 상태 평가는 실행 방식과 독립 |
+| migration 평가 주기와 동시 작업 수 | 상태에 따른 평가 주기, 설정 가능한 동시 개수 | 일정한 평가 간격, 한 번에 한 hot 존 이동 |
 | 가장 old SSD의 hottest zone -> youngest SSD의 empty zone | 구현됨 | 재사용, heat 동점에서는 유효 데이터량/복사량이 작은 후보 우선 |
 | 빈 zone이 없으면 SSD별 숨겨진 OP zone | 구현됨 | 재사용: SSD당 사용자 zone 하나 제외 |
 | cold -> old SSD의 OP 역방향 | 일괄 복사 | 유효 sector만 즉시 복사하고 무효화 완료를 기다림 |
@@ -19,7 +19,7 @@
 | 부분 page 쓰기 | 전체 task 종료 후 처리 | 기존 유효 sector만 보존 복사한 후 host write |
 | migration 중 읽기 | task 종료까지 대기 | 미이동 page는 원본, 이동한 page는 목적지; 복사/갱신 중에는 보수적으로 대기 |
 | cold 존에 새 쓰기 도착 | task 종료 후 replay | 남은 hot 복사를 강제 완료한 뒤 쓰기 replay |
-| 다음 주기에서 이전 작업 완료 | 별도 deadline 없음 | 다음 tick에서 잔여 복사 강제 시작; 완료 전 새 migration 금지 |
+| 이동 대상 변경 | 현재 작업 완료 후 정책 평가 | 매 epoch에 평가. 다른 대상이면 잔여 복사를 완료하고 바로 새 이동 시작. 이때 평가 주기를 다시 시작 |
 | 인기도 | migration 최종 완료 시 HALF_DECAY, 또는 LAST_EPOCH | HALF_EPOCH 추가: 고정 주기별 반감 + 현재 주기 write sectors |
 | 페이지 이동 추적 | grab/dirty bitmap | 현재 한 존의 page bitmap, copy 상태와 host 완료 추적 |
 
@@ -29,7 +29,7 @@
 
 - 제공된 Ilhoon Shin의 원고 **Tail Erase Count: A Wear Metric for Lifetime-Aware Management in Heterogeneous SSD Clusters**: OP 경계 erase count와 TEC 정규화 정의를 적용한다. 해당 원고 자체가 이 RAID0 lazy 정책을 완성하거나 그 수명 효과를 검증한 것은 아니다.
 - [Chameleon: An Adaptive Wear Balancer for Flash Clusters, IPDPS 2018](https://people.cs.vt.edu/~butta/docs/ipdps2018-chameleon.pdf), III-B/III-C: 새 write/update에 맞춰 목적지를 바꾸고 중간 상태의 최신 위치로 읽기를 보내는 아이디어, 주기별 exponential heat를 차용했다. REP/EC 전환이나 논문 전체를 재현하지 않는다. 교수님 요구에 따라 RAID0의 zone을 대상으로 page별로 적용한다.
-- 다음 주기에 강제 drain하는 규칙과 cold write 시 전체 작업을 끝내는 규칙은 교수님이 제안한 이 실험 정책의 규칙이다. Chameleon의 epoch-log compaction과 동일한 알고리즘이라고 주장하지 않는다.
+- 이동 조건을 충족하지 않거나 hot 존과 목적지 SSD가 같으면 여러 epoch에 걸쳐 lazy 이동을 계속한다. 유효 데이터가 모두 목적지에 있으면 매핑을 확정한다. cold write와 일반 빈 목적지 read는 안전한 매핑 전환을 위해 잔여 복사를 마친다.
 
 ## 실행
 
@@ -49,7 +49,7 @@ ON_DEMAND는 SSD 2개 이상, 단일 flow, PAGE_LEVEL, preconditioning OFF, devi
 설정:
 
 - `SWANS_Migration_Mode`: `EAGER`(기존 기본값) / `ON_DEMAND`.
-- `SWANS_Epoch_Migration`: ON_DEMAND 고정 주기(ns). NORMAL/REDIRECT/MIGRATION 상태별 가변 주기를 쓰지 않는다.
+- `SWANS_Epoch_Migration`: ON_DEMAND 평가 간격(ns). 새 대상으로 전환한 시각에 평가 주기를 다시 시작한다.
 - `SWANS_Zone_Popularity_Mode=HALF_EPOCH`: 주기 경계에서 기존 heat를 반감하고 현재 write sectors를 누적한다. migration 완료 횟수와 무관하다. `LAST_EPOCH`도 기존처럼 사용할 수 있다. `HALF_DECAY`는 호환용 기존 의미를 유지한다.
 - `op_zone_migration`: `true`이면 빈 목적지가 없을 때 OP 존 교환을 허용한다. `false`이면 일반 빈 목적지만 사용한다.
 
@@ -65,9 +65,16 @@ ON_DEMAND는 SSD 2개 이상, 단일 flow, PAGE_LEVEL, preconditioning OFF, devi
 
 XML의 `SWANS_Migration_Mode`, `SWANS_Migration_Fixed_Period`, migration record의 `Execution_Mode`, `Start_Time`, `Status`를 확인한다.
 
+SWANS ON이면 workload 결과 옆에 `*_scenario_1.migrations.csv`를 생성한다. `RAID_Telemetry_Enabled`와 독립적으로 migration 시작, lazy 강제 복사 전환, 완료, EOL 중단 이벤트를 기록한다. 각 이벤트는 SSD 수만큼 행을 쓰며 `sample`과 `migration_sequence`로 묶는다. SSD와 zone ID는 0부터 시작한다.
+
+- 시간은 ns와 초를 기록한다. `duration_s`는 완료된 이동의 소요 시간이며, 진행 중·중단 상태에서는 비워 둔다. `elapsed_s`는 이벤트까지 경과 시간이다. 이전 이동과의 비교는 직전 sequence를 기준으로 시작 이후·종료 이후 경과 시간과 이전 완료 이동의 소요 시간을 제공한다. 첫 이동이나 아직 완료되지 않은 이전 이동의 값은 빈 칸이다.
+- `source_ssd/destination_ssd`, `source_zone/destination_zone`은 시작 시 선택한 hot→cold 경로다. zone은 디렉터리의 전역 논리 ID다. 예약 존 교환에서는 `reverse_*`에 cold→source SSD 예약 존 경로도 기록한다.
+- `execution_mode`는 EAGER/ON_DEMAND다. `forced_drain=1`은 lazy 잔여 복사를 강제한 상태이며 최초 사유를 `TARGET_CHANGED`, `COLD_WRITE`, `DESTINATION_READ`로 기록한다. 시작 행의 0은 이후 강제 전환 여부를 확정하지 않으므로 같은 sequence의 force/end 행을 함께 확인한다.
+- SSD별로 전체 블록 erase 최소·최대·평균·표준편차와 PE 한도 대비 마모율, 누적 완료 NAND program/erase, host 귀속 쓰기 bytes와 balance-unit 환산값, TEC와 TEC 마모율, bad block 수와 OP 기반 마모율 및 잔여 OP를 기록한다. 블록 분포는 퇴역 블록을 포함한다. Host 쓰기는 귀속 시점 누적값이며 NAND 완료량과 구분한다. Host 쓰기의 수명 백분율은 TBW 한도가 정의되지 않아 제공하지 않는다.
+
 - `SWANS_Lazy_Offloaded_Pages`: 이전 데이터 복사 없이 전체 page 쓰기를 목적지로 보낸 수.
 - `SWANS_Lazy_Copied_Pages`: 보존 복사를 완료한 hot page 수(역방향 cold는 별도 stage 통계).
-- `SWANS_Lazy_Deadline_Drains`: 다음 tick에서 강제 drain한 작업 수.
+- `SWANS_Lazy_Handoff_Drains`: 다른 이동 대상이 선택돼 잔여 복사를 강제한 작업 수. 호환용 `SWANS_Lazy_Deadline_Drains`는 0이다.
 - `SWANS_Lazy_Cold_Write_Drains`: cold write가 강제 drain을 일으킨 수.
 - `SWANS_Lazy_Remaining_Pages`: 아직 최종 정리가 남은 page 수.
 - 기존 `SWANS_Exchange_Cold_Stages_Completed`, source discard, backpressure 및 host/NAND 통계도 유지된다.
@@ -76,7 +83,7 @@ host write, migration write, NAND program은 서로 다른 통계다. 새 예제
 
 ## 재현 가능한 검증
 
-단위 테스트는 mock sector payload를 사용해 부분 쓰기 보존, 전체 덮어쓰기, 최신 위치 읽기, cold 교환/예약 역할 회전, 무효화 재시도, page 경계 요청, 복사 도중 deadline, backpressure와 EOL 잠금을 확인한다.
+단위 테스트는 mock sector payload를 사용해 부분 쓰기 보존, 전체 덮어쓰기, 최신 위치 읽기, cold 교환/예약 역할 회전, 무효화 재시도, page 경계 요청, 복사 도중 대상 변경에 따른 잔여 복사, backpressure와 EOL 잠금을 확인한다.
 
 ```powershell
 g++ -std=c++11 -O0 validation/lazy_zone_test.cpp src/policy/lazy_migration.cpp src/policy/migration_executor.cpp src/policy/zone_directory.cpp src/policy/wear_leveling_policy.cpp src/ssd/User_Request.cpp -o build/lazy_zone_test.exe

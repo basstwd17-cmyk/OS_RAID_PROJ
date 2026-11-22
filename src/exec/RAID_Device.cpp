@@ -206,7 +206,13 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 		});
 	} // 각 SSD의 캐시 매니저에 완료 알림 등록
 	raid_controller->Observation_event = [this](const std::string& event, uint64_t migration) {
-		if (telemetry_enabled) Emit_snapshot(event, migration, Capture_snapshot(Simulator->Time(), false));
+		if (migration_events.is_open()) {
+			const auto snapshot = Capture_snapshot(Simulator->Time(), true);
+			Emit_migration_event(event, migration, snapshot);
+			if (telemetry_enabled) Emit_snapshot(event, migration, snapshot);
+		} else if (telemetry_enabled) {
+			Emit_snapshot(event, migration, Capture_snapshot(Simulator->Time(), false));
+		}
 	};
 	SSD_Components::Device_Lifecycle_Monitor::Register_end_of_life_handler([this]() {
 		if (eol_captured) return;
@@ -275,6 +281,10 @@ void RAID_Device::Perform_preconditioning(std::vector<Utils::Workload_Statistics
 void RAID_Device::Initialize_io_streams(const std::vector<Host_Components::IO_Flow_Base*>& io_flows,
 	Host_Components::SATA_HBA* sata_hba)
 {
+	if (ssd_configs.front().SWANS_Migration_Mode == "ON_DEMAND" && !io_flows.empty()) {
+		auto* flow = io_flows.front();
+		raid_controller->Host_has_pending_io = [flow]() { return flow->Has_pending_io(Simulator->Time()); };
+	}
 	switch (Host_interface->GetType()) { // 호스트 인터페이스 타입에 따라 처리
 		case HostInterface_Types::NVME:
 			for (uint16_t flow_cntr = 0; flow_cntr < io_flows.size(); flow_cntr++) {

@@ -85,7 +85,7 @@ public:
 	uint64_t Find_coldest_used_zone_on_ssd(unsigned int ssd_id, const std::vector<uint64_t>& reserved) const;
 
 	uint64_t Find_migration_zone(unsigned int ssd, bool global, bool cumulative,
-		const std::vector<uint64_t>& reserved) const;
+		const std::vector<uint64_t>& reserved, uint64_t active_hot_zone = INVALID_ZONE_ID) const;
 	void Mark_migrating(uint64_t zone_id, bool migrating);
 	void Swap_placement(uint64_t logical_zone_a, uint64_t logical_zone_b);
 	void Complete_migration(uint64_t hot_zone, uint64_t cold_zone,

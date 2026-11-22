@@ -52,10 +52,12 @@ public:
 	bool Replay_ready(const SSD_Components::User_Request* request) const;
 	void Resolve_on_demand(ZoneResolveResult& resolved) const;
 	void Notify_host_completed(const io_request_id_type& id);
-	void Force_finish();
+	void Force_finish(const std::string& reason = "TARGET_CHANGED");
+	std::function<void(uint64_t, const std::string&)> Lazy_forced;
+	const MigrationOp* Active_lazy_migration() const { return lazy.Active ? &lazy.Task.Op : nullptr; }
 	uint64_t Lazy_offloaded_pages() const { return lazy_offloaded_pages; }
 	uint64_t Lazy_copied_pages() const { return lazy_copied_pages; }
-	uint64_t Lazy_deadline_drains() const { return lazy_deadline_drains; }
+	uint64_t Lazy_handoff_drains() const { return lazy_handoff_drains; }
 	uint64_t Lazy_cold_write_drains() const { return lazy_cold_write_drains; }
 	uint64_t Lazy_remaining_pages() const;
 	// A migration copy is issued one at a time per task.  The controller uses
@@ -98,10 +100,8 @@ private:
 	enum class LazyPhase { IDLE, READ, WRITE, DISCARD };
 	struct LazyState {
 		bool Active = false, Started = false, Cold = false, Force = false, Host_discard_ready = false;
-		bool Deadline_counted = false;
 		MigrationTask Task;
 		uint64_t Target_zone = INVALID_ZONE_ID;
-		sim_time_type Deadline = 0;
 		unsigned int Page_sectors = 0, Page = 0;
 		unsigned int Target_disk = 0;
 		LHA_type Target_lba = 0;
@@ -115,12 +115,12 @@ private:
 	};
 	LazyState lazy;
 	uint64_t lazy_offloaded_pages = 0, lazy_copied_pages = 0;
-	uint64_t lazy_deadline_drains = 0, lazy_cold_write_drains = 0;
-	void Lazy_start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory, sim_time_type now);
+	uint64_t lazy_handoff_drains = 0, lazy_cold_write_drains = 0;
+	void Lazy_start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory);
 	InterceptResult Lazy_intercept(SSD_Components::User_Request* request,
 		const std::vector<uint64_t>& zones, ZoneDirectory& directory, sim_time_type now);
 	void Lazy_poll(ZoneDirectory& directory, const SubmitCopyFunction& submit,
-		const DiscardFunction& discard, sim_time_type now);
+		const DiscardFunction& discard);
 	bool Lazy_copy_completed(const io_request_id_type& id);
 	StripeCopyPlan Lazy_page_plan(const ZoneDirectory& directory, unsigned int page) const;
 	bool Lazy_prepare_page(ZoneDirectory& directory, unsigned int page);

@@ -59,11 +59,12 @@ void MigrationExecutor::Configure_limits(const MigrationLimits& value)
 sim_time_type MigrationExecutor::Next_wakeup(sim_time_type fallback) const
 {
 	if (limits.On_demand) {
-		if (!lazy.Active) return std::numeric_limits<sim_time_type>::max();
-		if (!lazy.Copy_id.empty() || !lazy.Host_id.empty())
-			return lazy.Force ? std::numeric_limits<sim_time_type>::max() : lazy.Deadline;
-		return (!lazy.Cold && !lazy.Force && lazy.Requests.empty()) ? lazy.Deadline
-			: std::min(fallback, lazy.Force ? fallback : lazy.Deadline);
+		if (lazy.Active && lazy.Copy_id.empty() && lazy.Host_id.empty()
+			&& (lazy.Cold || lazy.Force || lazy.Host_discard_ready
+				|| lazy.Phase != LazyPhase::IDLE || !lazy.Requests.empty())) {
+			return fallback;
+		}
+		return std::numeric_limits<sim_time_type>::max();
 	}
 	sim_time_type next = std::numeric_limits<sim_time_type>::max();
 	for (const auto& task : inflight) {
@@ -96,7 +97,7 @@ bool MigrationExecutor::Pause_before_copy(InflightTask& task, sim_time_type now)
 
 void MigrationExecutor::Start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory, sim_time_type now)
 {
-	if (limits.On_demand) { Lazy_start(tasks, directory, now); return; }
+	if (limits.On_demand) { Lazy_start(tasks, directory); return; }
 	zone_bytes = directory.Zone_size_lba() * SECTOR_SIZE_IN_BYTE;
 	block_bytes = static_cast<uint64_t>(directory.Block_unit_lba()) * SECTOR_SIZE_IN_BYTE;
 	if (!inflight.empty()) {
@@ -547,7 +548,7 @@ void MigrationExecutor::Poll(ZoneDirectory& directory,
 	const SubmitCopyFunction& submit_copy,
 	const DiscardFunction& discard_source, sim_time_type now)
 {
-	if (limits.On_demand) { Lazy_poll(directory, submit_copy, discard_source, now); Update_peaks(); return; }
+	if (limits.On_demand) { Lazy_poll(directory, submit_copy, discard_source); Update_peaks(); return; }
 	for (size_t i = 0; i < inflight.size(); i++) {
 		InflightTask& task = inflight[i];
 		Drain_pending_source_discards(task, discard_source, i);

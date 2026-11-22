@@ -41,17 +41,17 @@ PWL의 `1`은 고정 수명 한도다. 관측된 SSD 중 최대 마모도를 다
 | `op_zone_migration=false` | 일반 빈 존만 사용. 빈 목적지가 없으면 해당 migration을 시작하지 못함 |
 | `op_zone_migration=true` | 실행 시작부터 SSD마다 존 하나를 사용자 용량에서 제외해 예약. 일반 빈 존을 먼저 쓰고, 없을 때만 cold → source 예약 존 → hot 순서로 교환 |
 | `SWANS_Migration_Mode=EAGER` | 기존 grab/swap/restore 방식으로 요청 갱신을 기다리지 않고 이동. NAND read/write와 완료 대기는 실제로 발생 |
-| `SWANS_Migration_Mode=ON_DEMAND` | 한 hot 존에 대해 전체 페이지 덮어쓰기를 목적지로 보냄. 부분 쓰기는 기존 유효 데이터를 보존. 다음 고정 경계 또는 cold write에서 잔여 복사를 강제 |
+| `SWANS_Migration_Mode=ON_DEMAND` | 한 hot 존에 대해 전체 페이지 덮어쓰기를 목적지로 보냄. 부분 쓰기는 기존 유효 데이터를 보존. 다른 이동 대상이 선택되면 남은 데이터를 복사한 뒤 새 이동을 시작 |
 
 extra zone ON은 중간에 용량을 줄이는 기능이 아니다. 예약 공간은 처음부터 확보하고 실제 교환에 사용하는 시점만 늦춘다. cold는 쓰기 빈도가 낮다는 뜻이며 데이터량이 작다는 보장은 없다. 역방향 완료 시간과 요청 대기 시간은 복사량에 따라 달라진다. 비워진 존은 RAID/FTL의 논리 매핑 관점에서 재사용 가능해진 것이며, 모든 NAND 블록이 즉시 erase되었다는 뜻은 아니다.
 
-ON_DEMAND는 한 주기 한 hot 존 작업을 대상으로 한다. 역방향이 필요한 경우 그 시간도 같은 작업/기한에 포함되므로, 역방향 완료 뒤부터 정확히 한 주기를 추가로 주지는 않는다. 기한에는 잔여 복사를 시작하며 NAND I/O가 끝나야 완료된다. 완료가 다음 경계를 넘으면 새 작업은 이후 고정 경계까지 기다린다.
+ON_DEMAND는 한 번에 한 hot 존만 이동한다. 매 epoch마다 정책을 평가하고, 이동 조건 미충족 또는 같은 hot 존과 목적지 SSD가 선택되면 기존 작업을 계속한다. 다른 대상이면 기존 작업의 NAND I/O와 매핑 전환이 완료되는 시각에 다음 작업을 시작한다. 이 시각부터 다음 epoch를 계산한다. 기존 목적지와 충돌하는 cold write 및 일반 빈 목적지 read도 안전한 매핑 전환을 위해 잔여 복사를 마친다.
 
 ## 비교 실험 조건
 
 8개 예제는 상태 평가 × 예약 존 × 실행 방식의 조합이며, 다른 공통 설정은 같다. 상태 평가는 WRITE_STDDEV / TEC_PWL, 예약 존은 on / off, 이동은 eager / lazy다. 모든 예제의 epoch 세 값과 인기도 기간은 40초, 최대 동시 migration은 1, 인기도는 HALF_EPOCH, stripe = zone = 32768 LBA이다. 임계값은 기능 예시이며 trace별 튜닝이 필요하다.
 
-EAGER는 기존 상태별 평가 간격을 유지한다. ON_DEMAND는 `SWANS_Epoch_Migration`의 고정 시간축을 쓴다. 따라서 공정한 비교에서는 세 epoch 값을 예제처럼 동일하게 둔다. 실행 중 작업은 완료 전 겹쳐 시작하지 않는다. 예약 존 ON/OFF는 사용자 용량도 바꾸므로 같은 SSD 수/geometry에서 ON이 허용하는 공통 LBA 범위의 trace를 사용한다.
+EAGER는 기존 상태별 평가 간격을 유지한다. ON_DEMAND는 `SWANS_Epoch_Migration`을 평가 간격으로 쓰고 다른 대상의 이동을 시작하는 시점에 기준 시각을 갱신한다. 공정한 비교에서는 세 epoch 값을 예제처럼 동일하게 둔다. 예약 존 ON/OFF는 사용자 용량도 바꾸므로 같은 SSD 수/geometry에서 ON이 허용하는 공통 LBA 범위의 trace를 사용한다.
 
 ON_DEMAND의 구조적 제한은 유지한다: SSD 2개 이상, 단일 flow, PAGE_LEVEL, device cache OFF, preconditioning OFF, page 정렬된 stripe=zone, concurrency=1, 양수 migration period. TEC나 DYNAMIC_WEAR는 더 이상 필수 조건이 아니다. extra zone 사용에도 단일 flow / PAGE_LEVEL / cache OFF 조건이 적용된다.
 

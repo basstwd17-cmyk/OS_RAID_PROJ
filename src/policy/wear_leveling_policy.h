@@ -23,7 +23,10 @@ public:
 	// Records a destination-LBA migration write only after its background request
 	// completes. Historical writes are never reassigned between SSDs.
 	void Observe_completed_migration_write(unsigned int ssd_id, uint64_t write_bytes);
-	PolicyDecision Evaluate(const ZoneDirectory& directory, const WearSnapshot& wear);
+	PolicyDecision Evaluate(const ZoneDirectory& directory, const WearSnapshot& wear,
+		const MigrationOp* active = nullptr);
+	MigrationOp Plan_migration(const ZoneDirectory& directory, uint64_t hot_zone, unsigned int cold_ssd,
+		const std::vector<uint64_t>& reserved = {}, const MigrationOp* active = nullptr) const;
 	bool Has_epoch_writes() const;
 	void Configure_metric(const std::string& metric, const std::string& trigger,
 		const std::string& selection, double precautionary, double critical);

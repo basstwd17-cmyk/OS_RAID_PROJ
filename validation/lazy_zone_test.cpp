@@ -69,7 +69,13 @@ struct Fixture {
                 if(p->Type==UserRequestType::WRITE){
                     const int value=10000+int(lba);storage[address(z,off)]=value;expected[{z,off}]=value;
                     d.Observe_write(0,z,off,1,s==0);
-                }else assert(storage.at(address(z,off))==expected.at({z,off}));
+                }else if (expected.count({z,off})) {
+                    assert(storage.at(address(z,off))==expected.at({z,off}));
+                }else {
+                    // MQSim initializes logical data on first read.
+                    assert(!storage.count(address(z,off)));
+                    storage[address(z,off)]=expected[{z,off}]=0;
+                }
             }
             if(host_complete)e.Notify_host_completed(p->ID);
         }
@@ -97,18 +103,19 @@ void normal_lazy() {
     auto partial=f.request(11,1);f.enqueue(partial,107);
     for(unsigned i=0;f.e.Buffered_count() && i<30;++i)f.step(108+i);
     assert(f.e.Buffered_count()==0 && f.reads==1 && f.writes==1); // only valid 10..12 copied
-    f.finish();assert(f.e.Lazy_deadline_drains()==1);
+    f.finish();assert(f.e.Lazy_handoff_drains()==0);
 }
 
-void exchange_and_deadline() {
+void exchange_and_handoff() {
     Fixture f(true);
     auto old_hot=f.address(0,0),old_cold=f.address(1,0);
     assert(f.d.Is_reserve_zone(4)); // an admitted reserve is locked, so it is no longer an available spare
     for(unsigned i=0;f.e.Cold_stages_completed()==0 && i<50;++i)f.step(101+i);
     assert(f.e.Cold_stages_completed()==1 && f.e.Has_inflight());
     assert(f.address(0,0)==old_hot && f.address(1,0)!=old_cold);
-    auto before=f.io;f.step(190);assert(f.io==before); // hot phase remains lazy
-    f.verify();f.failed_discards=2;f.finish();
+    auto before=f.io;f.step(200);f.step(300);assert(f.io==before && f.e.Has_inflight());
+    f.verify();f.failed_discards=2;f.e.Force_finish();f.finish(301);
+    assert(f.e.Lazy_handoff_drains()==1);
     assert(f.address(0,0)==old_cold);
     unsigned disk;LHA_type lba;f.d.Resolve_zone_lba(4,0,disk,lba);
     assert(Address(disk,lba)==old_hot && f.d.Is_empty(4));
@@ -120,7 +127,7 @@ void cold_write_forces_completion() {
     auto cold_write=f.request(16,8);f.enqueue(cold_write,130);
     for(unsigned i=0;f.e.Has_inflight() && i<100;++i)f.step(131+i/4);
     assert(!f.e.Has_inflight() && f.e.Lazy_cold_write_drains()==1);
-    assert(f.e.Lazy_deadline_drains()==0);f.verify();
+    assert(f.e.Lazy_handoff_drains()==0);f.verify();
 }
 
 void popularity_and_policy() {
@@ -184,12 +191,18 @@ void queue_and_abort() {
     assert(f.d.Migrating_zone_count()==2 && !f.e.Has_inflight()); // EOL never advertises partial zones as reusable
 }
 
-void empty_destination_read_waits() {
+void empty_destination_read_completes() {
     Fixture f(false);f.step(101);
-	f.e.Task_finished=[](uint64_t,bool aborted){assert(aborted);};
+    unsigned forced = 0;
+    f.e.Lazy_forced = [&](uint64_t hot, const std::string& reason) {
+        assert(hot == 0 && reason == "DESTINATION_READ");
+        ++forced;
+    };
     auto read=f.request(16,1,UserRequestType::READ);f.enqueue(read,102);
-    f.step(103);assert(f.e.Buffered_count()==1 && f.io==0);
-    auto summary=f.e.Abort_all(f.d);assert(summary.Deferred_request_count==1);
+    f.step(103);assert(f.e.Buffered_count()==1 && f.io==1);
+    f.finish(104);
+    assert(f.e.Buffered_count()==0 && f.e.Lazy_handoff_drains()==0);
+    assert(forced == 1);
 }
 
 void cross_page_updates() {
@@ -197,13 +210,14 @@ void cross_page_updates() {
     f.enqueue(f.request(6,4),102);
     for(unsigned i=0;f.e.Buffered_count() && i<40;++i)f.step(103+i);
     assert(f.e.Buffered_count()==0 && f.reads==2 && f.writes==2);
+    f.e.Force_finish();
     f.finish();
     Fixture g(false);g.step(101);
     g.enqueue(g.request(0,12),102);g.step(102);
     assert(g.e.Lazy_offloaded_pages()==1 && g.e.Has_active_copy());
-    // Deadline arrives while preserving the partial second page. The first
+    // Handoff arrives while preserving the partial second page. The first
     // page's full overwrite must complete before its old source is discarded.
-    g.finish(200);assert(g.e.Lazy_deadline_drains()==1);
+    g.e.Force_finish();g.finish(200);assert(g.e.Lazy_handoff_drains()==1);
 }
 
-int main(){normal_lazy();exchange_and_deadline();cold_write_forces_completion();popularity_and_policy();independent_state_and_space_options();queue_and_abort();empty_destination_read_waits();cross_page_updates();std::cout<<"lazy migration unit tests passed\n";}
+int main(){normal_lazy();exchange_and_handoff();cold_write_forces_completion();popularity_and_policy();independent_state_and_space_options();queue_and_abort();empty_destination_read_completes();cross_page_updates();std::cout<<"lazy migration unit tests passed\n";}

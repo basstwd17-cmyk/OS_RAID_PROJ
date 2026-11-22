@@ -522,12 +522,12 @@ uint64_t ZoneDirectory::Find_coldest_used_zone_on_ssd(unsigned int ssd_id, const
 }
 
 uint64_t ZoneDirectory::Find_migration_zone(unsigned int ssd, bool global, bool cumulative,
-	const std::vector<uint64_t>& reserved) const
+	const std::vector<uint64_t>& reserved, uint64_t active_hot_zone) const
 {
 	uint64_t selected = INVALID_ZONE_ID;
 	for (uint64_t z = 0; z < zones.size(); ++z) {
 		const auto& zone = zones[z];
-		if (zone.Reserve || zone.Empty || zone.Migrating || Is_reserved(z, reserved)
+		if (zone.Reserve || zone.Empty || (zone.Migrating && z != active_hot_zone) || Is_reserved(z, reserved)
 			|| (!global && Owner_ssd(z) != ssd)) continue;
 		const double score = cumulative ? static_cast<double>(zone.Written_sectors) : Zone_popularity(z);
 		const double best = selected == INVALID_ZONE_ID ? -1 : (cumulative

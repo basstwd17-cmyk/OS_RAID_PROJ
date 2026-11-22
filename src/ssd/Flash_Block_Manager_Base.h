@@ -56,6 +56,8 @@ namespace SSD_Components
 		unsigned int Free_pages_count;
 		unsigned int Valid_pages_count;
 		unsigned int Invalid_pages_count;
+		unsigned int GC_threshold;
+		unsigned int GC_hard_threshold;
 		Block_Pool_Slot_Type* Blocks;
 		std::multimap<unsigned int, Block_Pool_Slot_Type*> Free_block_pool;
 		Block_Pool_Slot_Type** Data_wf, ** GC_wf; //The write frontier blocks for data and GC pages. MQSim adopts Double Write Frontier approach for user and GC writes which is shown very advantages in: B. Van Houdt, "On the necessity of hot and cold data identification to reduce the write amplification in flash - based SSDs", Perf. Eval., 2014

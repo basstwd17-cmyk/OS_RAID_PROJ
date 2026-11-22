@@ -20,6 +20,12 @@ double population_sd(const std::vector<double>& values)
 
 void RAID_Device::Configure_telemetry_output(const std::string& prefix)
 {
+    if (ssd_configs[0].SWANS_Enabled) {
+        migration_events.open(prefix + ".migrations.csv", std::ios::out | std::ios::trunc);
+        if (!migration_events) throw std::runtime_error("Cannot open migration event output");
+        migration_events << "sample,event,time_ns,time_s,migration_sequence,status,execution_mode,forced_drain,force_reason,force_time_s,start_time_s,end_time_s,elapsed_s,duration_s,previous_migration_sequence,seconds_since_previous_start,seconds_since_previous_end,previous_migration_duration_s,source_ssd,destination_ssd,source_zone,destination_zone,reserve_zone,space_mode,reverse_source_ssd,reverse_destination_ssd,reverse_source_zone,reverse_destination_zone,ssd_id,host_write_bytes_attributed,host_write_units,completed_nand_programmed_bytes,completed_nand_page_programs,completed_nand_block_erases,block_erase_min,block_erase_max,block_erase_mean,block_erase_sd,erase_limit,mean_erase_wear_percent,max_erase_wear_percent,tec_valid,tec,tec_wear_percent,bad_blocks,bad_block_wear_percent,remaining_op_ratio\n";
+        migration_events << std::setprecision(17);
+    }
     if (!telemetry_enabled) return;
     telemetry_path = prefix + ".telemetry.csv";
     telemetry.open(telemetry_path, std::ios::out | std::ios::trunc);
@@ -41,6 +47,9 @@ RAID_Device::Snapshot RAID_Device::Capture_snapshot(sim_time_type time, bool det
         o.Bad_blocks = ftl->BlockManager->Get_bad_block_count();
         o.Wear = ftl->BlockManager->Get_wear_snapshot();
         o.Remaining_op_ratio = ftl->BlockManager->Get_current_op_ratio();
+        o.Bad_block_wear_percent = 100.0 * RAID_Policy::Bad_block_wear(o.Bad_blocks,
+            ftl->BlockManager->Get_total_block_count(), ftl->BlockManager->Get_initial_op_block_budget(),
+            ftl->BlockManager->Get_end_of_life_threshold());
         o.Host_bytes = raid_controller->Get_ssd_attributed_host_write_sectors(i) * SECTOR_SIZE_IN_BYTE;
         std::vector<double> programs, erases;
         for (unsigned int ch = 0; ch < ssd->Channel_count; ++ch) {
@@ -64,9 +73,75 @@ RAID_Device::Snapshot RAID_Device::Capture_snapshot(sim_time_type time, bool det
         o.Programmed_bytes = o.Programs * cfg.Page_Capacity;
         o.Block_program_SD = population_sd(programs);
         o.Block_erase_SD = population_sd(erases);
+        if (!erases.empty()) {
+            const auto bounds = std::minmax_element(erases.begin(), erases.end());
+            o.Min_erase_count = static_cast<unsigned int>(*bounds.first);
+            o.Max_erase_count = static_cast<unsigned int>(*bounds.second);
+            long double sum = 0;
+            for (double count : erases) sum += count;
+            o.Mean_erase_count = static_cast<double>(sum / erases.size());
+        }
         s.SSDs.push_back(o);
     }
     return s;
+}
+
+void RAID_Device::Emit_migration_event(const std::string& event, uint64_t migration, const Snapshot& s)
+{
+    const auto& record = raid_controller->Get_migration_record(migration);
+    const auto* previous = migration ? &raid_controller->Get_migration_record(migration - 1) : nullptr;
+    const bool completed = record.Status == "COMPLETED";
+    const bool ended = record.Status != "ACTIVE";
+    const bool previous_ended = previous && previous->Status != "ACTIVE";
+    const bool previous_completed = previous && previous->Status == "COMPLETED";
+    const double elapsed = static_cast<double>(s.Time - record.Start_time) / ONE_SECOND;
+    ++migration_event_samples;
+    for (unsigned int i = 0; i < s.SSDs.size(); ++i) {
+        const auto& o = s.SSDs[i];
+        migration_events << migration_event_samples << ',' << event << ',' << s.Time
+            << ',' << static_cast<double>(s.Time) / ONE_SECOND << ',' << migration << ',' << record.Status
+            << ',' << (raid_controller->Lazy_migration_enabled() ? "ON_DEMAND" : "EAGER")
+            << ',' << (record.Force_reason != "NONE") << ',' << record.Force_reason << ',';
+        if (record.Force_reason != "NONE") migration_events << static_cast<double>(record.Force_time) / ONE_SECOND;
+        migration_events << ',' << static_cast<double>(record.Start_time) / ONE_SECOND << ',';
+        if (ended) migration_events << static_cast<double>(record.End_time) / ONE_SECOND;
+        migration_events << ',' << elapsed << ',';
+        if (completed) migration_events << static_cast<double>(record.End_time - record.Start_time) / ONE_SECOND;
+        migration_events << ',';
+        if (previous) migration_events << previous->Sequence;
+        migration_events << ',';
+        if (previous) migration_events << static_cast<double>(s.Time - previous->Start_time) / ONE_SECOND;
+        migration_events << ',';
+        if (previous_ended) migration_events << static_cast<double>(s.Time - previous->End_time) / ONE_SECOND;
+        migration_events << ',';
+        if (previous_completed) migration_events << static_cast<double>(previous->End_time - previous->Start_time) / ONE_SECOND;
+        migration_events << ',' << record.Hot_ssd << ',' << record.Cold_ssd
+            << ',' << record.Hot_zone << ',' << record.Cold_zone << ',';
+        if (record.Reserve_zone != RAID_Policy::INVALID_ZONE_ID) migration_events << record.Reserve_zone;
+        migration_events << ',' << (record.Reserve_zone == RAID_Policy::INVALID_ZONE_ID ? "EMPTY_DESTINATION" : "RESERVE_EXCHANGE");
+        if (record.Reserve_zone != RAID_Policy::INVALID_ZONE_ID) {
+            migration_events << ',' << record.Cold_ssd << ',' << record.Hot_ssd
+                << ',' << record.Cold_zone << ',' << record.Reserve_zone;
+        } else {
+            migration_events << ",,,,";
+        }
+        migration_events << ',' << i << ',' << o.Host_bytes
+            << ',' << static_cast<double>(o.Host_bytes) / ssd_configs[0].SWANS_Balance_Unit_Bytes
+            << ',' << o.Programmed_bytes << ',' << o.Programs << ',' << o.Erases
+            << ',' << o.Min_erase_count << ',' << o.Max_erase_count << ',' << o.Mean_erase_count
+            << ',' << o.Block_erase_SD << ',' << o.Wear.Erase_limit << ',';
+        if (o.Wear.Erase_limit) migration_events << 100.0 * o.Mean_erase_count / o.Wear.Erase_limit;
+        migration_events << ',';
+        if (o.Wear.Erase_limit) migration_events << 100.0 * o.Max_erase_count / o.Wear.Erase_limit;
+        migration_events << ',' << o.Wear.Valid << ',';
+        if (o.Wear.Valid) migration_events << o.Wear.Tail_erase_count;
+        migration_events << ',';
+        if (o.Wear.Valid) migration_events << o.Wear.Wear_percent;
+        migration_events << ',' << o.Bad_blocks << ',';
+        if (std::isfinite(o.Bad_block_wear_percent)) migration_events << o.Bad_block_wear_percent;
+        migration_events << ',' << o.Remaining_op_ratio << '\n';
+    }
+    migration_events.flush();
 }
 
 void RAID_Device::Emit_snapshot(const std::string& event, uint64_t migration, const Snapshot& s)

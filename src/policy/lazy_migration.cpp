@@ -1,24 +1,20 @@
 #include "migration_executor.h"
 #include <algorithm>
-#include <limits>
 #include <stdexcept>
 
 namespace RAID_Policy {
 
-void MigrationExecutor::Lazy_start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory, sim_time_type now)
+void MigrationExecutor::Lazy_start(const std::vector<MigrationTask>& tasks, ZoneDirectory& directory)
 {
     if (Has_inflight() || tasks.empty()) return;
     if (tasks.size() != 1 || !limits.Period || directory.Stripe_unit_lba() != directory.Zone_size_lba())
         throw std::invalid_argument("ON_DEMAND requires one task and stripe = zone");
-    if (now / limits.Period >= std::numeric_limits<sim_time_type>::max() / limits.Period)
-        throw std::overflow_error("Migration epoch overflow");
     lazy = LazyState();
     lazy.Active = true;
     lazy.Task = tasks.front();
     lazy.Page_sectors = directory.Block_unit_lba();
     if (!lazy.Page_sectors || directory.Zone_size_lba() % lazy.Page_sectors)
         throw std::invalid_argument("ON_DEMAND requires page-aligned zones");
-    lazy.Deadline = (now / limits.Period + 1) * limits.Period;
     lazy.Moved.assign(directory.Zone_size_lba() / lazy.Page_sectors, false);
     lazy.Cold = lazy.Task.Op.Reserve_zone != INVALID_ZONE_ID;
     lazy.Target_zone = lazy.Cold ? lazy.Task.Op.Reserve_zone : lazy.Task.Op.Cold_zone;
@@ -59,9 +55,13 @@ void MigrationExecutor::Notify_host_completed(const io_request_id_type& id)
     }
 }
 
-void MigrationExecutor::Force_finish()
+void MigrationExecutor::Force_finish(const std::string& reason)
 {
-    if (limits.On_demand && lazy.Active) lazy.Force = true;
+    if (lazy.Active && !lazy.Force) {
+        if (reason == "TARGET_CHANGED") ++lazy_handoff_drains;
+        lazy.Force = true;
+        if (Lazy_forced) Lazy_forced(lazy.Task.Op.Hot_zone, reason);
+    }
 }
 
 uint64_t MigrationExecutor::Lazy_remaining_pages() const
@@ -78,7 +78,7 @@ MigrationExecutor::InterceptResult MigrationExecutor::Lazy_intercept(SSD_Compone
     const bool hot = Hits_zone(lazy.Task.Op.Hot_zone, zones);
     if (cold && request->Type == SSD_Components::UserRequestType::WRITE) {
         if (!lazy.Force) ++lazy_cold_write_drains;
-        lazy.Force = true;
+        Force_finish("COLD_WRITE");
     }
     if (request->Type == SSD_Components::UserRequestType::READ && lazy.Started && !lazy.Cold
         && (!cold || lazy.Task.Op.Reserve_zone != INVALID_ZONE_ID)
@@ -177,15 +177,10 @@ bool MigrationExecutor::Lazy_copy_completed(const io_request_id_type& id)
 }
 
 void MigrationExecutor::Lazy_poll(ZoneDirectory& directory, const SubmitCopyFunction& submit,
-    const DiscardFunction& discard, sim_time_type now)
+    const DiscardFunction& discard)
 {
     if (!lazy.Active) return;
     lazy.Started = true;
-    if (now >= lazy.Deadline && !lazy.Deadline_counted) {
-        lazy.Deadline_counted = true;
-        ++lazy_deadline_drains;
-        lazy.Force = true;
-    }
     if (!lazy.Copy_id.empty() || !lazy.Host_id.empty()) return;
     if (lazy.Host_discard_ready) {
         while (!lazy.Pending_host_discards.empty()) {
@@ -229,15 +224,20 @@ void MigrationExecutor::Lazy_poll(ZoneDirectory& directory, const SubmitCopyFunc
         directory.Resolve_zone_lba(lazy.Target_zone, 0, lazy.Target_disk, lazy.Target_lba);
     }
 
+    // An ordinary destination read needs the final mapping before it can
+    // initialize data. Finishing here also lets a read-only tail make progress.
+    if (lazy.Preparing_id.empty() && !lazy.Requests.empty()
+        && lazy.Requests.front().Request->Type == SSD_Components::UserRequestType::READ
+        && lazy.Task.Op.Reserve_zone == INVALID_ZONE_ID
+        && Lazy_touches_cold(lazy.Requests.front().Request, directory)) {
+        Force_finish("DESTINATION_READ");
+    }
+
     // Complete an already-prepared host write before a forced drain: its
     // overwrite pages have no copied destination data until the real I/O ends.
-    if (!lazy.Force || !lazy.Preparing_id.empty()) {
-        if (lazy.Requests.empty()) return;
+    if ((!lazy.Force && !lazy.Requests.empty()) || !lazy.Preparing_id.empty()) {
         const auto& next = lazy.Requests.front();
         if (next.Request->Type == SSD_Components::UserRequestType::READ) {
-            // An ordinary empty logical destination shares the physical zone
-            // receiving hot pages until commit. Its reads must await remapping.
-            if (lazy.Task.Op.Reserve_zone == INVALID_ZONE_ID && Lazy_touches_cold(next.Request, directory)) return;
             replay_queue.push_back(next);
             lazy.Requests.pop_front();
             return;
@@ -264,11 +264,20 @@ void MigrationExecutor::Lazy_poll(ZoneDirectory& directory, const SubmitCopyFunc
         return;
     }
 
-    for (unsigned int page = 0; page < lazy.Moved.size(); ++page)
-        if (!lazy.Moved[page] && Lazy_prepare_page(directory, page)) {
-            lazy.Copy_id = submit(lazy.Runs.front(), false, 0);
-            return;
+    if (lazy.Force) {
+        for (unsigned int page = 0; page < lazy.Moved.size(); ++page)
+            if (!lazy.Moved[page] && Lazy_prepare_page(directory, page)) {
+                lazy.Copy_id = submit(lazy.Runs.front(), false, 0);
+                return;
+            }
+    } else {
+        // Untouched logical pages have no source data to copy.
+        for (const auto& stream : directory.Written_block_offsets_by_stream(lazy.Task.Op.Hot_zone)) {
+            for (auto page : stream.second) {
+                if (!lazy.Moved[page]) return;
+            }
         }
+    }
     // All pages are authoritative at the destination; no in-flight user I/O
     // remains (the controller drains it before polling). Rotate zone roles.
     directory.Swap_placement(lazy.Task.Op.Hot_zone, lazy.Target_zone);

@@ -113,6 +113,16 @@ RAID_Controller::RAID_Controller(const sim_object_id_type& id,
 			}
 		}
 	};
+	migration_executor.Lazy_forced = [this](uint64_t hot_zone, const std::string& reason) {
+		for (auto& record : swans_migration_history) {
+			if (record.Hot_zone == hot_zone && record.Status == "ACTIVE") {
+				record.Force_reason = reason;
+				record.Force_time = Simulator->Time();
+				if (Observation_event) Observation_event("migration_force", record.Sequence);
+				break;
+			}
+		}
+	};
 	Set_complete_callback([this](SSD_Components::User_Request* request) {
 		if (request->Transaction_list.size() != 0) {
 			std::cerr << "[RAID] WARN: Completing request with non-empty Transaction_list! ID=" << request->ID
@@ -914,6 +924,106 @@ void RAID_Controller::Schedule_swans_event(sim_time_type fire_time)
 	swans_scheduled_event_time = fire_time;
 }
 
+void RAID_Controller::Evaluate_swans_policy(sim_time_type now)
+{
+	zone_directory.Advance_popularity(now);
+	const auto wear = wear_metric_provider ? wear_metric_provider() : RAID_Policy::WearSnapshot();
+	swans_last_decision = wear_leveling_policy.Evaluate(zone_directory, wear, migration_executor.Active_lazy_migration());
+	swans_stats.Epoch_evaluations++;
+	swans_stats.Last_mu = swans_last_decision.Mu;
+
+	if (swans_policy_state != swans_last_decision.State) {
+		swans_stats.State_transitions++;
+	}
+	swans_policy_state = swans_last_decision.State;
+	{
+		std::ostringstream oss;
+		oss << "epoch_eval t=" << now
+			<< " mu=" << swans_last_decision.Mu
+			<< " state=" << swans_state_to_string(swans_policy_state);
+		if (swans_policy_state == RAID_Policy::PolicyState::REDIRECT && swans_last_decision.Redirect.Valid) {
+			oss << " hot_ssd=" << swans_last_decision.Redirect.Hot_ssd
+				<< " cold_ssd=" << swans_last_decision.Redirect.Cold_ssd;
+		}
+		if (swans_policy_state == RAID_Policy::PolicyState::MIGRATION) {
+			oss << " migration_candidates=" << swans_last_decision.Migrations.size();
+			if (!swans_last_decision.Migrations.empty()) {
+				oss << " first_hot_zone=" << swans_last_decision.Migrations[0].Hot_zone
+					<< " first_cold_zone=" << swans_last_decision.Migrations[0].Cold_zone
+					<< " hot_ssd=" << swans_last_decision.Migrations[0].Hot_ssd
+					<< " cold_ssd=" << swans_last_decision.Migrations[0].Cold_ssd;
+			}
+		}
+		swans_trace(oss.str());
+	}
+
+	switch (swans_policy_state) {
+		case RAID_Policy::PolicyState::NORMAL:
+			swans_stats.Normal_epochs++;
+			break;
+		case RAID_Policy::PolicyState::REDIRECT:
+			swans_stats.Redirect_epochs++;
+			break;
+		case RAID_Policy::PolicyState::MIGRATION:
+			swans_stats.Migration_epochs++;
+			break;
+	}
+}
+
+bool RAID_Controller::Start_swans_migrations(const std::vector<RAID_Policy::MigrationOp>& ops, sim_time_type now)
+{
+	const auto tasks = Build_migration_tasks(ops);
+	if (tasks.empty()) return false;
+	swans_stats.Migration_operations += tasks.size();
+	for (const RAID_Policy::MigrationTask& task : tasks) {
+		Swans_Migration_Record record;
+		if (swans_last_decision.Wear_valid) {
+			record.Source_wear = swans_last_decision.Wear_values[task.Op.Hot_ssd];
+			record.Destination_wear = swans_last_decision.Wear_values[task.Op.Cold_ssd];
+		}
+		record.Wear_average = swans_last_decision.Wear_average;
+		record.Wear_threshold = swans_last_decision.Wear_threshold;
+		record.Sequence = swans_migration_history.size();
+		record.Start_time = now;
+		record.Hot_zone = task.Op.Hot_zone;
+		record.Cold_zone = task.Op.Cold_zone;
+		record.Reserve_zone = task.Op.Reserve_zone;
+		for (const auto& copy : task.Cold_copies) record.Cold_copy_sectors += copy.Lba_count;
+		record.Hot_ssd = task.Op.Hot_ssd;
+		record.Cold_ssd = task.Op.Cold_ssd;
+		record.Copy_blocks = task.Copies.size();
+		std::vector<stream_id_type> seen_streams;
+		for (const RAID_Policy::StripeCopyPlan& copy : task.Copies) {
+			record.Copy_sectors += copy.Lba_count;
+			if (std::find(seen_streams.begin(), seen_streams.end(), copy.Stream_id) == seen_streams.end()) {
+				seen_streams.push_back(copy.Stream_id);
+			}
+		}
+		record.Stream_count = seen_streams.size();
+		if (!task.Copies.empty()) {
+			const RAID_Policy::StripeCopyPlan& first_copy = task.Copies.front();
+			record.First_stream_id = first_copy.Stream_id;
+			record.First_source_disk = first_copy.Source_disk_id;
+			record.First_destination_disk = first_copy.Destination_disk_id;
+			record.First_source_lba = first_copy.Source_lba;
+			record.First_destination_lba = first_copy.Destination_lba;
+		}
+		swans_migration_history.push_back(record);
+	}
+	migration_executor.Start(tasks, zone_directory, now);
+	if (Observation_event) {
+		for (size_t i = swans_migration_history.size() - tasks.size(); i < swans_migration_history.size(); ++i)
+			Observation_event("migration_start", swans_migration_history[i].Sequence);
+	}
+	Schedule_swans_event(now + 1);
+	{
+		std::ostringstream oss;
+		oss << "migration start task_count=" << tasks.size();
+		swans_trace(oss.str());
+	}
+	return true;
+}
+
 void RAID_Controller::Handle_swans_event()
 {
 	if (!swans_enabled) {
@@ -924,7 +1034,21 @@ void RAID_Controller::Handle_swans_event()
 		return;
 	}
 
-	sim_time_type now = Simulator->Time();
+	const sim_time_type now = Simulator->Time();
+	const bool on_demand = migration_executor.On_demand();
+	if (const auto* active = migration_executor.Active_lazy_migration()) {
+		if (!lazy_handoff_pending && now >= next_policy_evaluation_time) {
+			Evaluate_swans_policy(now);
+			next_policy_evaluation_time = now + swans_epoch_migration;
+			if (!swans_last_decision.Migrations.empty()) {
+				const auto& target = swans_last_decision.Migrations.front();
+				if (target.Hot_zone != active->Hot_zone || target.Cold_ssd != active->Cold_ssd) {
+					lazy_handoff_pending = true;
+					migration_executor.Force_finish();
+				}
+			}
+		}
+	}
 	if (migration_executor.Has_inflight()) {
 		// Start marks both zones first. New requests are buffered, while requests
 		// dispatched before the mark drain before the first source copy begins.
@@ -932,6 +1056,7 @@ void RAID_Controller::Handle_swans_event()
 			swans_stats.Migration_barrier_waits++;
 			// Notify_sub_request_completed schedules the next event when the
 			// last pre-migration user request makes progress.
+			if (on_demand && !lazy_handoff_pending) Schedule_swans_event(next_policy_evaluation_time);
 			return;
 		}
 		migration_executor.Poll(zone_directory,
@@ -975,6 +1100,7 @@ void RAID_Controller::Handle_swans_event()
 		}
 
 		if (migration_executor.Has_inflight()) {
+			if (on_demand) Try_replay_blocked_requests();
 			const sim_time_type wakeup = migration_executor.Next_wakeup(now + swans_poll_interval);
 			if (wakeup != std::numeric_limits<sim_time_type>::max()) {
 				// The executor has no submitted copy (for example a future
@@ -982,112 +1108,30 @@ void RAID_Controller::Handle_swans_event()
 				// while a real flash request is outstanding.
 				Schedule_swans_event(wakeup);
 			}
+			if (on_demand && !lazy_handoff_pending && ((Host_has_pending_io && Host_has_pending_io())
+				|| wear_leveling_policy.Has_epoch_writes() || migration_executor.Buffered_count())) {
+				Schedule_swans_event(next_policy_evaluation_time);
+			}
 			return;
 		}
 	}
 
 	Try_replay_blocked_requests();
-	// Skip a missed boundary while a previous zone drains. New migrations only
-	// start on fixed ticks, never immediately after a delayed completion.
-	if (migration_executor.On_demand() && now > next_policy_evaluation_time)
-		next_policy_evaluation_time = (now / swans_epoch_migration + 1) * swans_epoch_migration;
+	if (lazy_handoff_pending) {
+		lazy_handoff_pending = false;
+		const auto& target = swans_last_decision.Migrations.front();
+		// Resolve placement again after the old task commits and releases its zones.
+		const auto op = wear_leveling_policy.Plan_migration(zone_directory, target.Hot_zone, target.Cold_ssd);
+		if (op.Cold_zone != RAID_Policy::INVALID_ZONE_ID && Start_swans_migrations({op}, now)) {
+			next_policy_evaluation_time = now + swans_epoch_migration;
+			return;
+		}
+		swans_trace("lazy handoff skipped: target no longer has an admissible copy plan");
+	}
 
 	if (now >= next_policy_evaluation_time) {
-		zone_directory.Advance_popularity(now);
-		const auto wear = wear_metric_provider ? wear_metric_provider() : RAID_Policy::WearSnapshot();
-		swans_last_decision = wear_leveling_policy.Evaluate(zone_directory, wear);
-		swans_stats.Epoch_evaluations++;
-		swans_stats.Last_mu = swans_last_decision.Mu;
-
-		if (swans_policy_state != swans_last_decision.State) {
-			swans_stats.State_transitions++;
-		}
-		swans_policy_state = swans_last_decision.State;
-		{
-			std::ostringstream oss;
-			oss << "epoch_eval t=" << now
-				<< " mu=" << swans_last_decision.Mu
-				<< " state=" << swans_state_to_string(swans_policy_state);
-			if (swans_policy_state == RAID_Policy::PolicyState::REDIRECT && swans_last_decision.Redirect.Valid) {
-				oss << " hot_ssd=" << swans_last_decision.Redirect.Hot_ssd
-					<< " cold_ssd=" << swans_last_decision.Redirect.Cold_ssd;
-			}
-			if (swans_policy_state == RAID_Policy::PolicyState::MIGRATION) {
-				oss << " migration_candidates=" << swans_last_decision.Migrations.size();
-				if (!swans_last_decision.Migrations.empty()) {
-					oss << " first_hot_zone=" << swans_last_decision.Migrations[0].Hot_zone
-						<< " first_cold_zone=" << swans_last_decision.Migrations[0].Cold_zone
-						<< " hot_ssd=" << swans_last_decision.Migrations[0].Hot_ssd
-						<< " cold_ssd=" << swans_last_decision.Migrations[0].Cold_ssd;
-				}
-			}
-			swans_trace(oss.str());
-		}
-
-		switch (swans_policy_state) {
-			case RAID_Policy::PolicyState::NORMAL:
-				swans_stats.Normal_epochs++;
-				break;
-			case RAID_Policy::PolicyState::REDIRECT:
-				swans_stats.Redirect_epochs++;
-				break;
-			case RAID_Policy::PolicyState::MIGRATION:
-				swans_stats.Migration_epochs++;
-				break;
-		}
-
-		if (swans_policy_state == RAID_Policy::PolicyState::MIGRATION && !swans_last_decision.Migrations.empty()) {
-			std::vector<RAID_Policy::MigrationTask> tasks = Build_migration_tasks(swans_last_decision.Migrations);
-			if (!tasks.empty()) {
-				swans_stats.Migration_operations += tasks.size();
-				for (const RAID_Policy::MigrationTask& task : tasks) {
-					Swans_Migration_Record record;
-					if (swans_last_decision.Wear_valid) {
-						record.Source_wear = swans_last_decision.Wear_values[task.Op.Hot_ssd];
-						record.Destination_wear = swans_last_decision.Wear_values[task.Op.Cold_ssd];
-					}
-					record.Wear_average = swans_last_decision.Wear_average;
-					record.Wear_threshold = swans_last_decision.Wear_threshold;
-					record.Sequence = swans_migration_history.size();
-					record.Start_time = now;
-					record.Hot_zone = task.Op.Hot_zone;
-					record.Cold_zone = task.Op.Cold_zone;
-					record.Reserve_zone = task.Op.Reserve_zone;
-					for (const auto& copy : task.Cold_copies) record.Cold_copy_sectors += copy.Lba_count;
-					record.Hot_ssd = task.Op.Hot_ssd;
-					record.Cold_ssd = task.Op.Cold_ssd;
-					record.Copy_blocks = task.Copies.size();
-					std::vector<stream_id_type> seen_streams;
-					for (const RAID_Policy::StripeCopyPlan& copy : task.Copies) {
-						record.Copy_sectors += copy.Lba_count;
-						if (std::find(seen_streams.begin(), seen_streams.end(), copy.Stream_id) == seen_streams.end()) {
-							seen_streams.push_back(copy.Stream_id);
-						}
-					}
-					record.Stream_count = seen_streams.size();
-					if (!task.Copies.empty()) {
-						const RAID_Policy::StripeCopyPlan& first_copy = task.Copies.front();
-						record.First_stream_id = first_copy.Stream_id;
-						record.First_source_disk = first_copy.Source_disk_id;
-						record.First_destination_disk = first_copy.Destination_disk_id;
-						record.First_source_lba = first_copy.Source_lba;
-						record.First_destination_lba = first_copy.Destination_lba;
-					}
-					swans_migration_history.push_back(record);
-				}
-				migration_executor.Start(tasks, zone_directory, now);
-				if (Observation_event) {
-					for (size_t i = swans_migration_history.size() - tasks.size(); i < swans_migration_history.size(); ++i)
-						Observation_event("migration_start", swans_migration_history[i].Sequence);
-				}
-				Schedule_swans_event(now + 1);
-				{
-					std::ostringstream oss;
-					oss << "migration start task_count=" << tasks.size();
-					swans_trace(oss.str());
-				}
-			}
-		}
+		Evaluate_swans_policy(now);
+		Start_swans_migrations(swans_last_decision.Migrations, now);
 
 		sim_time_type next_epoch_interval = swans_epoch_default;
 		switch (swans_policy_state) {
@@ -1101,8 +1145,8 @@ void RAID_Controller::Handle_swans_event()
 				next_epoch_interval = swans_epoch_migration;
 				break;
 		}
-		next_policy_evaluation_time = migration_executor.On_demand()
-			? (now / swans_epoch_migration + 1) * swans_epoch_migration
+		next_policy_evaluation_time = on_demand
+			? now + swans_epoch_migration
 			: now + std::max((sim_time_type)1, next_epoch_interval);
 	}
 
@@ -1110,7 +1154,7 @@ void RAID_Controller::Handle_swans_event()
 	const bool has_epoch_writes = wear_leveling_policy.Has_epoch_writes();
 	if (migration_executor.Has_inflight()) {
 		Schedule_swans_event(now + swans_poll_interval);
-	} else if (has_inflight_user_or_background || has_epoch_writes) {
+	} else if (has_inflight_user_or_background || has_epoch_writes || (on_demand && Host_has_pending_io && Host_has_pending_io())) {
 		Schedule_swans_event(next_policy_evaluation_time);
 	}
 }
@@ -1148,7 +1192,9 @@ void RAID_Controller::process_new_user_request(SSD_Components::User_Request* use
 				swans_stats.Buffered_write_requests++;
 				swans_stats.Buffered_write_sectors += user_request->SizeInSectors;
 			}
-			if (swans_scheduled_event == nullptr) {
+			if (migration_executor.On_demand()) {
+				Schedule_swans_event(Simulator->Time() + 1);
+			} else if (swans_scheduled_event == nullptr) {
 				Schedule_swans_event(Simulator->Time() + swans_poll_interval);
 			}
 			return;
@@ -1156,7 +1202,9 @@ void RAID_Controller::process_new_user_request(SSD_Components::User_Request* use
 		if (intercepted == RAID_Policy::MigrationExecutor::InterceptResult::BACKPRESSURE) {
 			blocked_user_requests.push_back(user_request);
 			peak_blocked_requests = std::max<uint64_t>(peak_blocked_requests, blocked_user_requests.size());
-			if (swans_scheduled_event == nullptr) {
+			if (migration_executor.On_demand()) {
+				Schedule_swans_event(Simulator->Time() + 1);
+			} else if (swans_scheduled_event == nullptr) {
 				Schedule_swans_event(Simulator->Time() + swans_poll_interval);
 			}
 			return;
@@ -1293,7 +1341,8 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 	xmlwriter.Write_attribute_string("SWANS_Migration_Fixed_Period", migration_executor.On_demand() ? std::to_string(swans_epoch_migration) : "0");
 	xmlwriter.Write_attribute_string("SWANS_Lazy_Offloaded_Pages", std::to_string(migration_executor.Lazy_offloaded_pages()));
 	xmlwriter.Write_attribute_string("SWANS_Lazy_Copied_Pages", std::to_string(migration_executor.Lazy_copied_pages()));
-	xmlwriter.Write_attribute_string("SWANS_Lazy_Deadline_Drains", std::to_string(migration_executor.Lazy_deadline_drains()));
+	xmlwriter.Write_attribute_string("SWANS_Lazy_Deadline_Drains", "0");
+	xmlwriter.Write_attribute_string("SWANS_Lazy_Handoff_Drains", std::to_string(migration_executor.Lazy_handoff_drains()));
 	xmlwriter.Write_attribute_string("SWANS_Lazy_Cold_Write_Drains", std::to_string(migration_executor.Lazy_cold_write_drains()));
 	xmlwriter.Write_attribute_string("SWANS_Lazy_Remaining_Pages", std::to_string(migration_executor.Lazy_remaining_pages()));
 	xmlwriter.Write_attribute_string("SWANS_Mu_Unit", wear_leveling_policy.Metric() == "TEC"
@@ -1428,6 +1477,9 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 		xmlwriter.Write_attribute_string("Status", record.Status);
 		xmlwriter.Write_attribute_string("Mode", record.Reserve_zone == RAID_Policy::INVALID_ZONE_ID ? "EMPTY_DESTINATION" : "op_zone_migration");
 		xmlwriter.Write_attribute_string("Execution_Mode", migration_executor.On_demand() ? "ON_DEMAND" : "EAGER");
+		xmlwriter.Write_attribute_string("Forced_Drain", record.Force_reason == "NONE" ? "false" : "true");
+		xmlwriter.Write_attribute_string("Force_Reason", record.Force_reason);
+		xmlwriter.Write_attribute_string("Force_Time_ns", std::to_string(record.Force_time));
 		xmlwriter.Write_attribute_string("Reserve_Zone", record.Reserve_zone == RAID_Policy::INVALID_ZONE_ID ? "NONE" : std::to_string(record.Reserve_zone));
 		xmlwriter.Write_attribute_string("Cold_Copy_Sectors", std::to_string(record.Cold_copy_sectors));
 		xmlwriter.Write_attribute_string("Duration_ns", std::to_string(record.End_time >= record.Start_time ? record.End_time - record.Start_time : 0));

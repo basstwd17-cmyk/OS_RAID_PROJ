@@ -59,6 +59,7 @@ namespace Host_Components
 		LHA_type Get_start_lsa_on_device();
 		LHA_type Get_end_lsa_address_on_device();
 		uint32_t Get_generated_request_count();
+		bool Has_pending_io(sim_time_type now) const;
 		uint32_t Get_serviced_request_count();//in microseconds
 		uint32_t Get_device_response_time();//in microseconds
 		uint32_t Get_min_device_response_time();//in microseconds
