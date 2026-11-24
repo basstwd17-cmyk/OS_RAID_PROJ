@@ -6,6 +6,7 @@ import json
 import random
 import subprocess
 import xml.etree.ElementTree as ET
+from validate_lazy import check_lazy_start_times
 from validate_lazy import setting
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,10 +123,9 @@ def main():
                 if state=='TEC_PWL':
                     assert all(float(r.findtext('Source_Wear'))>float(r.findtext('Wear_Threshold')) for r in records),name
                 if mode=='ON_DEMAND':
-                    starts = [int(r.findtext('Start_Time')) for r in records]
-                    assert len(starts)==len(set(starts)) and all(t%PERIOD==0 for t in starts),name
+                    check_lazy_start_times(records, PERIOD)
                     assert int(value('SWANS_Lazy_Offloaded_Pages'))>0,(name,'no write offload')
-                    assert int(value('SWANS_Lazy_Deadline_Drains'))>0,(name,'no deadline drain')
+                    assert value('SWANS_Lazy_Deadline_Drains')=='0',name
                     assert all(r.findtext('Status')!='ACTIVE' for r in records),name
                 else:
                     assert value('SWANS_Lazy_Offloaded_Pages')=='0',name

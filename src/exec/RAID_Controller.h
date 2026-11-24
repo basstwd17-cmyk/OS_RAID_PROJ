@@ -82,6 +82,36 @@ public:
 	};
 	Observation Get_observation();
 	std::function<void(const std::string&, uint64_t)> Observation_event;
+	std::function<bool()> Host_has_pending_io;
+
+	struct Swans_Migration_Record
+	{
+		double Source_wear = 0, Destination_wear = 0, Wear_average = 0, Wear_threshold = 0;
+		uint64_t Sequence = 0;
+		sim_time_type Start_time = 0;
+		sim_time_type End_time = 0;
+		std::string Status = "ACTIVE";
+		std::string Force_reason = "NONE";
+		sim_time_type Force_time = 0;
+		uint64_t Hot_zone = 0;
+		uint64_t Cold_zone = 0;
+		uint64_t Reserve_zone = RAID_Policy::INVALID_ZONE_ID;
+		uint64_t Cold_copy_sectors = 0;
+		unsigned int Hot_ssd = 0;
+		unsigned int Cold_ssd = 0;
+		unsigned int First_source_disk = 0;
+		unsigned int First_destination_disk = 0;
+		stream_id_type First_stream_id = 0;
+		uint64_t Stream_count = 0;
+		LHA_type First_source_lba = 0;
+		LHA_type First_destination_lba = 0;
+		uint64_t Copy_blocks = 0;
+		uint64_t Copy_sectors = 0;
+	};
+	const Swans_Migration_Record& Get_migration_record(uint64_t sequence) const {
+		return swans_migration_history.at(sequence);
+	}
+	bool Lazy_migration_enabled() const { return migration_executor.On_demand(); }
 
 private:
 	struct Inflight_Entry
@@ -182,28 +212,7 @@ private:
 		double Last_mu = 0.0;
 	};
 
-	struct Swans_Migration_Record
-	{
-		double Source_wear = 0, Destination_wear = 0, Wear_average = 0, Wear_threshold = 0;
-		uint64_t Sequence = 0;
-		sim_time_type Start_time = 0;
-		sim_time_type End_time = 0;
-		std::string Status = "ACTIVE";
-		uint64_t Hot_zone = 0;
-		uint64_t Cold_zone = 0;
-		uint64_t Reserve_zone = RAID_Policy::INVALID_ZONE_ID;
-		uint64_t Cold_copy_sectors = 0;
-		unsigned int Hot_ssd = 0;
-		unsigned int Cold_ssd = 0;
-		unsigned int First_source_disk = 0;
-		unsigned int First_destination_disk = 0;
-		stream_id_type First_stream_id = 0;
-		uint64_t Stream_count = 0;
-		LHA_type First_source_lba = 0;
-		LHA_type First_destination_lba = 0;
-		uint64_t Copy_blocks = 0;
-		uint64_t Copy_sectors = 0;
-	};
+
 
 	unsigned int ssd_count;
 	unsigned int stripe_unit_lba;
@@ -227,6 +236,7 @@ private:
 	sim_time_type swans_scheduled_event_time;
 	RAID_Policy::PolicyState swans_policy_state;
 	RAID_Policy::PolicyDecision swans_last_decision;
+	bool lazy_handoff_pending = false;
 	RAID_Policy::ZoneDirectory zone_directory;
 	RAID_Policy::WearLevelingPolicy wear_leveling_policy;
 	std::string wear_metric_name = "BAD_BLOCK_COUNT";
@@ -251,6 +261,8 @@ private:
 	bool Has_inflight_user_io_on_migrating_zone() const;
 	void Handle_end_of_life();
 	void Schedule_swans_event(sim_time_type fire_time);
+	void Evaluate_swans_policy(sim_time_type now);
+	bool Start_swans_migrations(const std::vector<RAID_Policy::MigrationOp>& ops, sim_time_type now);
 	void Handle_swans_event();
 	void process_new_user_request(SSD_Components::User_Request* user_request) override;
 };

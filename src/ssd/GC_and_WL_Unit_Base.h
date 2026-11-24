@@ -58,6 +58,7 @@ namespace SSD_Components
 		unsigned int Get_minimum_number_of_free_pages_before_GC();
 		unsigned int Get_gc_threshold_for_plane(const NVM::FlashMemory::Physical_Page_Address& plane_address) const;
 		unsigned int Get_gc_hard_threshold_for_plane(const NVM::FlashMemory::Physical_Page_Address& plane_address) const;
+		void Update_gc_thresholds_for_plane(const NVM::FlashMemory::Physical_Page_Address& plane_address);
 		bool Use_dynamic_wearleveling();
 		bool Use_static_wearleveling();
 		bool Stop_servicing_writes(const NVM::FlashMemory::Physical_Page_Address& plane_address);

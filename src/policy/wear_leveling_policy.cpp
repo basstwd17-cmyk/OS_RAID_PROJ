@@ -195,7 +195,46 @@ void WearLevelingPolicy::Reset_epoch()
 	}
 }
 
-PolicyDecision WearLevelingPolicy::Evaluate(const ZoneDirectory& directory, const WearSnapshot& wear)
+MigrationOp WearLevelingPolicy::Plan_migration(const ZoneDirectory& directory, uint64_t hot_zone,
+	unsigned int cold_ssd, const std::vector<uint64_t>& reserved, const MigrationOp* active) const
+{
+	const bool moving_source = active && hot_zone == active->Hot_zone;
+	if (moving_source && cold_ssd == active->Cold_ssd) return *active;
+	const unsigned int hot_ssd = moving_source ? active->Cold_ssd : directory.Owner_ssd(hot_zone);
+	if (hot_ssd == cold_ssd || directory.Is_empty(hot_zone)) return {};
+
+	MigrationOp op;
+	op.Hot_zone = hot_zone;
+	op.Hot_ssd = hot_ssd;
+	op.Cold_ssd = cold_ssd;
+	op.Cold_zone = directory.Find_empty_zone_on_ssd(cold_ssd, reserved);
+	// Finishing an ordinary move frees its old location under the cold zone ID.
+	if (op.Cold_zone == INVALID_ZONE_ID && active && active->Reserve_zone == INVALID_ZONE_ID
+		&& cold_ssd == active->Hot_ssd) {
+		op.Cold_zone = active->Cold_zone;
+	}
+	if (op.Cold_zone == INVALID_ZONE_ID) {
+		op.Reserve_zone = directory.Find_reserve_zone_on_ssd(hot_ssd, reserved);
+		// An exchange rotates its reserve back to the old hot location.
+		if (op.Reserve_zone == INVALID_ZONE_ID && active && hot_ssd == active->Hot_ssd) {
+			op.Reserve_zone = active->Reserve_zone;
+		}
+		if (op.Reserve_zone != INVALID_ZONE_ID) {
+			op.Cold_zone = directory.Find_coldest_used_zone_on_ssd(cold_ssd, reserved);
+			if (op.Cold_zone == INVALID_ZONE_ID && active && cold_ssd == active->Cold_ssd) {
+				op.Cold_zone = active->Hot_zone;
+			}
+			if (op.Cold_zone == INVALID_ZONE_ID && active && active->Reserve_zone != INVALID_ZONE_ID
+				&& cold_ssd == active->Hot_ssd) {
+				op.Cold_zone = active->Cold_zone;
+			}
+		}
+	}
+	return op;
+}
+
+PolicyDecision WearLevelingPolicy::Evaluate(const ZoneDirectory& directory, const WearSnapshot& wear,
+	const MigrationOp* active)
 {
 	PolicyDecision decision;	// 바로 NORMAL 처리 (초기화x,ssd1개,zonedirectory 미초기화면)
 	if (!initialized || ssd_count < 2 || !directory.Is_initialized()) {
@@ -251,10 +290,11 @@ PolicyDecision WearLevelingPolicy::Evaluate(const ZoneDirectory& directory, cons
 	decision.State = PolicyState::MIGRATION;	// -> MIGRATION 시도
 	decision.Redirect.Valid = false;
 	std::vector<uint64_t> reserved;
+	const uint64_t active_hot_zone = active ? active->Hot_zone : INVALID_ZONE_ID;
 	while (decision.Migrations.size() < max_concurrent_migrations) {
 		uint64_t hot_zone = selection == "GLOBAL_POPULARITY"
-			? directory.Find_migration_zone(0, true, false, reserved)
-			: directory.Find_migration_zone(hot_ssd, false, selection == "CUMULATIVE", reserved);
+			? directory.Find_migration_zone(0, true, false, reserved, active_hot_zone)
+			: directory.Find_migration_zone(hot_ssd, false, selection == "CUMULATIVE", reserved, active_hot_zone);
 		if (hot_zone == INVALID_ZONE_ID) break;
 		if (selection == "GLOBAL_POPULARITY") {
 			hot_ssd = directory.Owner_ssd(hot_zone);
@@ -264,17 +304,8 @@ PolicyDecision WearLevelingPolicy::Evaluate(const ZoneDirectory& directory, cons
 				reserved.push_back(hot_zone); continue;
 			}
 		}
-		uint64_t cold_zone = directory.Find_empty_zone_on_ssd(cold_ssd, reserved);
-		uint64_t reserve_zone = INVALID_ZONE_ID;
-		if (cold_zone == INVALID_ZONE_ID) {
-			// op_zone_migration: only when the selected destination has no
-			// available ordinary empty zone. Cold -> source OP, then hot ->
-			// freed cold location; the former hot location becomes source OP.
-			reserve_zone = directory.Find_reserve_zone_on_ssd(hot_ssd, reserved);
-			if (reserve_zone != INVALID_ZONE_ID)
-				cold_zone = directory.Find_coldest_used_zone_on_ssd(cold_ssd, reserved);
-		}
-		if (hot_zone == INVALID_ZONE_ID || cold_zone == INVALID_ZONE_ID || hot_zone == cold_zone) {
+		const MigrationOp op = Plan_migration(directory, hot_zone, cold_ssd, reserved, active);
+		if (op.Cold_zone == INVALID_ZONE_ID) {
 			// A global candidate on another SSD may have its own free spare.
 			if (selection == "GLOBAL_POPULARITY") {
 				reserved.push_back(hot_zone);
@@ -283,16 +314,10 @@ PolicyDecision WearLevelingPolicy::Evaluate(const ZoneDirectory& directory, cons
 			break;
 		}
 
-		MigrationOp op;
-		op.Hot_zone = hot_zone;
-		op.Cold_zone = cold_zone;
-		op.Hot_ssd = hot_ssd;
-		op.Cold_ssd = cold_ssd;
-		op.Reserve_zone = reserve_zone;
 		decision.Migrations.push_back(op);
-		reserved.push_back(hot_zone);
-		reserved.push_back(cold_zone);
-		if (reserve_zone != INVALID_ZONE_ID) reserved.push_back(reserve_zone);
+		reserved.push_back(op.Hot_zone);
+		reserved.push_back(op.Cold_zone);
+		if (op.Reserve_zone != INVALID_ZONE_ID) reserved.push_back(op.Reserve_zone);
 	}
 	// No movable source or free destination: retain write-based placement.
 	if (decision.Migrations.empty()) {

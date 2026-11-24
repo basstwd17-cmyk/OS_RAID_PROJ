@@ -473,6 +473,12 @@ IO_Flow_Base::IO_Flow_Base(const sim_object_id_type &name, uint16_t flow_id, LHA
 		return end_lsa_on_device;
 	}
 
+	bool IO_Flow_Base::Has_pending_io(sim_time_type now) const
+	{
+		return STAT_serviced_request_count < STAT_generated_request_count || progress_repeat_size
+			|| (stop_time ? now < stop_time : STAT_generated_request_count < total_requests_to_be_generated);
+	}
+
 	uint32_t IO_Flow_Base::Get_generated_request_count()
 	{
 		return STAT_generated_request_count;

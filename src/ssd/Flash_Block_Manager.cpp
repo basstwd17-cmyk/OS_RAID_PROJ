@@ -172,6 +172,7 @@ namespace SSD_Components
 			}
 			plane_record->Total_pages_count -= pages_no_per_block;
 			plane_record->Free_pages_count -= retired_free_pages;
+			gc_and_wl_unit->Update_gc_thresholds_for_plane(block_address);
 			// Notify observers after capacity accounting and the pool record are consistent.
 			Check_end_of_life();
 			return;

@@ -41,6 +41,8 @@ private:
 	struct SSD_Observation {
 		uint64_t Programs = 0, Erases = 0, Bad_blocks = 0, Host_bytes = 0, Programmed_bytes = 0;
 		double Block_program_SD = 0, Block_erase_SD = 0;
+		unsigned int Min_erase_count = 0, Max_erase_count = 0;
+		double Mean_erase_count = 0, Bad_block_wear_percent = 0;
 		SSD_Components::TECWearSnapshot Wear;
 		double Remaining_op_ratio = 0;
 	};
@@ -55,9 +57,12 @@ private:
 	uint64_t telemetry_samples = 0;
 	std::string telemetry_path;
 	std::ofstream telemetry;
+	std::ofstream migration_events;
+	uint64_t migration_event_samples = 0;
 	Snapshot eol_snapshot;
 	Snapshot Capture_snapshot(sim_time_type time, bool detailed) const;
 	void Emit_snapshot(const std::string& event, uint64_t migration, const Snapshot& sample);
+	void Emit_migration_event(const std::string& event, uint64_t migration, const Snapshot& sample);
 	void Write_snapshot_XML(const std::string& tag, const Snapshot& sample, Utils::XmlWriter& xmlwriter) const;
 	unsigned int ssd_count;
 	unsigned int stripe_unit_lba;
