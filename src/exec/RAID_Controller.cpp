@@ -158,20 +158,22 @@ void RAID_Controller::Register_preconditioned_data(unsigned int sectors_per_page
 	for (unsigned int disk = 0; disk < backend_ssds.size(); ++disk) {
 		auto ftl = static_cast<SSD_Components::FTL*>(backend_ssds[disk]->Firmware);
 		auto mapping = ftl->Address_Mapping_Unit;
-		for (LPA_type page = 0; page < mapping->Get_logical_pages_count(0); ++page) {
-			PPA_type ppa; page_status_type state;
-			mapping->Get_data_mapping_info_for_gc(0, page, ppa, state);
-			if (ppa == NO_PPA || !state) continue;
-			const LHA_type lba = page * sectors_per_page;
-			if (lba >= visible) {
-				backend_ssds[disk]->Discard_logical_range(0, lba, sectors_per_page);
-				continue;
-			}
-			for (unsigned int sector = 0; sector < sectors_per_page; ++sector) {
-				if (state & (static_cast<page_status_type>(1) << sector)) {
-					const LHA_type local = lba + sector;
-					zone_directory.Observe_data(0, local / zone_size * ssd_count + disk, local % zone_size, 1);
-					preconditioned_valid_sectors++;
+		for (stream_id_type stream = 0; stream < mapping->Get_no_of_input_streams(); ++stream) {
+			for (LPA_type page = 0; page < mapping->Get_logical_pages_count(stream); ++page) {
+				PPA_type ppa; page_status_type state;
+				mapping->Get_data_mapping_info_for_gc(stream, page, ppa, state);
+				if (ppa == NO_PPA || !state) continue;
+				const LHA_type lba = page * sectors_per_page;
+				if (lba >= visible) {
+					backend_ssds[disk]->Discard_logical_range(stream, lba, sectors_per_page);
+					continue;
+				}
+				for (unsigned int sector = 0; sector < sectors_per_page; ++sector) {
+					if (state & (static_cast<page_status_type>(1) << sector)) {
+						const LHA_type local = lba + sector;
+						zone_directory.Observe_data(stream, local / zone_size * ssd_count + disk, local % zone_size, 1);
+						preconditioned_valid_sectors++;
+					}
 				}
 			}
 		}
@@ -367,12 +369,18 @@ std::vector<RAID_Sub_Request> RAID_Controller::Split(LHA_type lba, unsigned int 
 				}
 				wear_leveling_policy.Observe_host_write(resolved.Disk_id,
 					static_cast<uint64_t>(chunk) * SECTOR_SIZE_IN_BYTE);
-			} else {
+			} else if (!migration_executor.Limits().Ignore_unmapped_reads) {
 				// MQSim initializes an unmapped read as logical data. It must not look empty.
 				zone_directory.Observe_data(stream_id, zone_id, resolved.Zone_lba_offset, chunk);
 			}
 
-			parts.push_back({ resolved.Disk_id, resolved.Local_lba, chunk, zone_id, resolved.Stripe_offset });
+			if (type == SSD_Components::UserRequestType::READ && migration_executor.Limits().Ignore_unmapped_reads
+				&& zone_directory.Is_migrating(zone_id) && zone_directory.Is_empty(zone_id)) {
+				// The empty logical destination may temporarily contain hot-page copies.
+				ignored_unmapped_read_sectors += chunk;
+			} else {
+				parts.push_back({ resolved.Disk_id, resolved.Local_lba, chunk, zone_id, resolved.Stripe_offset });
+			}
 			current_lba += chunk;
 			remaining -= chunk;
 		}
@@ -530,6 +538,9 @@ void RAID_Controller::Submit(SSD_Components::User_Request* request)
 		return;
 	}
 	if (parts.empty()) {
+		if (request->Type == SSD_Components::UserRequestType::READ) {
+			raid_request_stats.Completed_read_sectors += request->SizeInSectors;
+		}
 		const sim_time_type completion_latency = now >= request_start ? now - request_start : 0;
 		inflight.erase(request->ID);
 		raid_request_stats.Completed_requests++;
@@ -625,7 +636,8 @@ unsigned int RAID_Controller::Swans_mapping_chunk_length(const RAID_Policy::Zone
 	return static_cast<unsigned int>(bounded == 0 ? 1 : bounded);
 }
 
-std::vector<uint64_t> RAID_Controller::Collect_zone_ids(LHA_type lba, unsigned int lba_count) const
+std::vector<uint64_t> RAID_Controller::Collect_zone_ids(LHA_type lba, unsigned int lba_count,
+	bool read) const
 {
 	std::vector<uint64_t> zone_ids;
 	if (!swans_enabled || !zone_directory.Is_initialized() || lba_count == 0) {
@@ -637,10 +649,12 @@ std::vector<uint64_t> RAID_Controller::Collect_zone_ids(LHA_type lba, unsigned i
 	while (remaining > 0) {
 		RAID_Policy::ZoneResolveResult resolved;
 		zone_directory.Resolve(current_lba, resolved);
-		if (std::find(zone_ids.begin(), zone_ids.end(), resolved.Zone_id) == zone_ids.end()) {
+		const unsigned int chunk = Swans_mapping_chunk_length(resolved, remaining);
+		const bool ignored = read && migration_executor.Limits().Ignore_unmapped_reads
+			&& zone_directory.Is_empty(resolved.Zone_id);
+		if (!ignored && std::find(zone_ids.begin(), zone_ids.end(), resolved.Zone_id) == zone_ids.end()) {
 			zone_ids.push_back(resolved.Zone_id);
 		}
-		const unsigned int chunk = Swans_mapping_chunk_length(resolved, remaining);
 		current_lba += chunk;
 		remaining -= chunk;
 	}
@@ -877,7 +891,7 @@ void RAID_Controller::Try_replay_blocked_requests()
 		}
 
 		if (swans_enabled && migration_executor.Has_inflight()) {
-			std::vector<uint64_t> zones = Collect_zone_ids(request->Start_LBA, request->SizeInSectors);
+			std::vector<uint64_t> zones = Collect_zone_ids(request->Start_LBA, request->SizeInSectors, request->Type == SSD_Components::UserRequestType::READ);
 			RAID_Policy::MigrationExecutor::InterceptResult intercepted =
 				migration_executor.Maybe_intercept(request, zones, zone_directory,
 					[this](const RAID_Policy::MigrationTask& task, const SSD_Components::User_Request* buffered_request) {
@@ -1070,7 +1084,7 @@ void RAID_Controller::Handle_swans_event()
 		std::vector<RAID_Policy::MigrationExecutor::DeferredRequest> replay = migration_executor.Drain_replay_requests();
 		for (size_t i = 0; i < replay.size(); i++) {
 			if (replay[i].Request != nullptr && migration_executor.Has_inflight()) {
-				const std::vector<uint64_t> zones = Collect_zone_ids(replay[i].Request->Start_LBA, replay[i].Request->SizeInSectors);
+				const std::vector<uint64_t> zones = Collect_zone_ids(replay[i].Request->Start_LBA, replay[i].Request->SizeInSectors, replay[i].Request->Type == SSD_Components::UserRequestType::READ);
 				if (migration_executor.Intersects_inflight_zones(zones) && !migration_executor.Replay_ready(replay[i].Request)) {
 					// This request may have been released by one completed task while
 					// still touching another migrating zone.  Keep it out of the
@@ -1180,7 +1194,7 @@ void RAID_Controller::process_new_user_request(SSD_Components::User_Request* use
 	}
 
 	if (swans_enabled && migration_executor.Has_inflight()) {
-		std::vector<uint64_t> zones = Collect_zone_ids(user_request->Start_LBA, user_request->SizeInSectors);
+		std::vector<uint64_t> zones = Collect_zone_ids(user_request->Start_LBA, user_request->SizeInSectors, user_request->Type == SSD_Components::UserRequestType::READ);
 		RAID_Policy::MigrationExecutor::InterceptResult intercepted =
 			migration_executor.Maybe_intercept(user_request, zones, zone_directory,
 				[this](const RAID_Policy::MigrationTask& task, const SSD_Components::User_Request* buffered_request) {
@@ -1338,6 +1352,8 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 	xmlwriter.Write_attribute_string("SWANS_Redirect_Enabled", swans_enabled ? "true" : "false");
 	xmlwriter.Write_attribute_string("SWANS_Extra_Zone_Enabled", zone_directory.Zone_count() > zone_directory.User_zone_count() ? "true" : "false");
 	xmlwriter.Write_attribute_string("SWANS_Migration_Mode", migration_executor.On_demand() ? "ON_DEMAND" : "EAGER");
+	xmlwriter.Write_attribute_string("Unmapped_Read_Policy", migration_executor.Limits().Ignore_unmapped_reads ? "IGNORE" : "INITIALIZE");
+	xmlwriter.Write_attribute_string("RAID_Ignored_Unmapped_Read_Sectors", std::to_string(ignored_unmapped_read_sectors));
 	xmlwriter.Write_attribute_string("SWANS_Migration_Fixed_Period", migration_executor.On_demand() ? std::to_string(swans_epoch_migration) : "0");
 	xmlwriter.Write_attribute_string("SWANS_Lazy_Offloaded_Pages", std::to_string(migration_executor.Lazy_offloaded_pages()));
 	xmlwriter.Write_attribute_string("SWANS_Lazy_Copied_Pages", std::to_string(migration_executor.Lazy_copied_pages()));
@@ -1399,6 +1415,13 @@ void RAID_Controller::Report_results_in_XML(std::string name_prefix, Utils::XmlW
 	xmlwriter.Write_attribute_string("SWANS_Migration_Active", migration_executor.Has_inflight() ? "true" : "false");
 	xmlwriter.Write_attribute_string("SWANS_Migrating_Zones", std::to_string(zone_directory.Migrating_zone_count()));
 	xmlwriter.Write_attribute_string("SWANS_Mapping_Entries", std::to_string(zone_directory.Zone_count()));
+	uint64_t empty_user_zones = 0, valid_user_sectors = 0;
+	for (uint64_t zone = 0; zone < zone_directory.User_zone_count(); ++zone) {
+		if (zone_directory.Is_empty(zone)) ++empty_user_zones;
+		valid_user_sectors += zone_directory.Zone_valid_sectors(zone);
+	}
+	xmlwriter.Write_attribute_string("SWANS_Empty_User_Zones", std::to_string(empty_user_zones));
+	xmlwriter.Write_attribute_string("SWANS_Valid_User_Sectors", std::to_string(valid_user_sectors));
 	xmlwriter.Write_attribute_string("SWANS_Mapping_Duplicate_Physical_Locations",
 		std::to_string(zone_directory.Duplicate_physical_location_count()));
 

@@ -90,6 +90,9 @@ namespace SSD_Components
 		virtual unsigned int Get_current_cmt_occupancy_for_stream(stream_id_type stream_id) = 0;
 		virtual LPA_type Get_logical_pages_count(stream_id_type stream_id) = 0; //Returns the number of logical pages allocated to an I/O stream
 		unsigned int Get_no_of_input_streams() { return no_of_input_streams; }
+		void Set_ignore_unmapped_reads(bool ignore) { ignore_unmapped_reads = ignore; }
+		bool Ignore_unmapped_reads() const { return ignore_unmapped_reads; }
+		uint64_t Ignored_unmapped_read_sectors() const { return ignored_unmapped_read_sectors; }
 		bool Is_ideal_mapping_table(); //Checks if ideal mapping table is enabled in which all address translations entries are always in CMT (i.e., CMT is infinite in size) and thus all adddress translation requests are always successful
 
 		//Address translation functions
@@ -122,6 +125,8 @@ namespace SSD_Components
 		virtual void Remove_barrier_for_accessing_mvpn(const stream_id_type stream_id, const MVPN_type mvpn, const NVM::FlashMemory::Physical_Page_Address& owner_block_address) = 0; //Removes only the barrier owned by the completed GC/WL operation.
 		virtual void Start_servicing_writes_for_overfull_plane(const NVM::FlashMemory::Physical_Page_Address plane_address) = 0;//This function is invoked when GC execution is finished on a plane and the plane has enough number of free pages to service writes
 	protected:
+		bool ignore_unmapped_reads = false;
+		uint64_t ignored_unmapped_read_sectors = 0;
 		FTL* ftl;
 		NVM_PHY_ONFI* flash_controller;
 		Flash_Block_Manager_Base* block_manager;

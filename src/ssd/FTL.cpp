@@ -910,6 +910,10 @@ namespace SSD_Components
 		xmlwriter.Write_attribute_string_inline(attr, val);
 
 		const Barrier_Statistics barrier_statistics = Address_Mapping_Unit == NULL ? Barrier_Statistics() : Address_Mapping_Unit->Get_barrier_statistics();
+		xmlwriter.Write_attribute_string_inline("Unmapped_Read_Policy",
+			Address_Mapping_Unit->Ignore_unmapped_reads() ? "IGNORE" : "INITIALIZE");
+		xmlwriter.Write_attribute_string_inline("Ignored_Unmapped_Read_Sectors",
+			std::to_string(Address_Mapping_Unit->Ignored_unmapped_read_sectors()));
 		const Free_Block_Pool_Statistics free_block_pool_statistics = Address_Mapping_Unit == NULL ? Free_Block_Pool_Statistics() : Address_Mapping_Unit->Get_free_block_pool_statistics();
 		attr = "Free_Block_Pool_Deferred_Program_Transactions";
 		xmlwriter.Write_attribute_string_inline(attr, std::to_string(free_block_pool_statistics.Deferred_program_transactions));

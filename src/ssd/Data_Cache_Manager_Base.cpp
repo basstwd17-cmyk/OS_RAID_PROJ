@@ -31,6 +31,13 @@ namespace SSD_Components
 	}
 
 	void Data_Cache_Manager_Base::Start_simulation() {}
+
+	void Data_Cache_Manager_Base::Complete_read_without_flash(NVM_Transaction_Flash* transaction)
+	{
+		User_Request* request = transaction->UserIORequest;
+		request->Transaction_list.remove(transaction);
+		if (is_user_request_finished(request)) broadcast_user_request_serviced_signal(request);
+	}
 	
 	void Data_Cache_Manager_Base::Validate_simulation_config() {}
 

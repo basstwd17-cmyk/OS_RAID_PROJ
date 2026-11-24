@@ -64,6 +64,7 @@ struct MigrationTask
 
 struct MigrationLimits {
 	bool On_demand = false;
+	bool Ignore_unmapped_reads = false;
 	sim_time_type Period = 0; // epoch length for ON_DEMAND policy evaluation
 	sim_time_type Slice_time = 0; // ns; 0 disables
 	uint64_t Slice_sectors = 0; // completed destination sectors per slice; 0 disables

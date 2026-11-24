@@ -306,6 +306,7 @@ void Device_Parameter_Set::XML_serialize(Utils::XmlWriter& xmlwriter)
 
 	attr = "End_of_Life_Threshold";
 	xmlwriter.Write_attribute_string("End_of_Life_Mode", End_of_Life_Mode);
+	xmlwriter.Write_attribute_string("Unmapped_Read_Policy", Unmapped_Read_Policy);
 	xmlwriter.Write_attribute_string("End_of_Life_TEC_Threshold_Percent", std::to_string(End_of_Life_TEC_Threshold_Percent));
 	val = std::to_string(End_of_Life_Threshold);
 	xmlwriter.Write_attribute_string(attr, val);
@@ -680,6 +681,12 @@ void Device_Parameter_Set::XML_deserialize(rapidxml::xml_node<> *node)
 				}
 			} else if (strcmp(param->name(), "End_of_Life_Mode") == 0) {
 				End_of_Life_Mode = param->value();
+			} else if (strcmp(param->name(), "Unmapped_Read_Policy") == 0) {
+				Unmapped_Read_Policy = param->value();
+				std::transform(Unmapped_Read_Policy.begin(), Unmapped_Read_Policy.end(), Unmapped_Read_Policy.begin(), ::toupper);
+				if (Unmapped_Read_Policy != "INITIALIZE" && Unmapped_Read_Policy != "IGNORE") {
+					PRINT_ERROR("Unmapped_Read_Policy must be INITIALIZE or IGNORE")
+				}
 			} else if (strcmp(param->name(), "End_of_Life_TEC_Threshold_Percent") == 0) {
 				const std::string value = param->value();
 				size_t end = 0;

@@ -38,6 +38,7 @@ namespace SSD_Components
 		void Connect_to_user_memory_transaction_serviced_signal(const MemoryTransactionServicedSignalHanderType&);
 		void Set_host_interface(Host_Interface_Base* host_interface);
 		void Submit_user_request(User_Request* user_request) { process_new_user_request(user_request); }
+		void Complete_read_without_flash(NVM_Transaction_Flash* transaction);
 		virtual void Do_warmup(std::vector<Utils::Workload_Statistics*> workload_stats) = 0;
 	protected:
 		Host_Interface_Base* host_interface;
