@@ -292,6 +292,10 @@ SSD_Device::SSD_Device(Device_Parameter_Set *parameters, std::vector<IO_Flow_Par
 			throw std::invalid_argument("No implementation is available fo the secified address mapping strategy");
 		}
 		Simulator->AddObject(amu);
+		if (parameters->Unmapped_Read_Policy == "IGNORE" && parameters->Address_Mapping != SSD_Components::Flash_Address_Mapping_Type::PAGE_LEVEL) {
+			throw std::invalid_argument("Unmapped_Read_Policy=IGNORE requires PAGE_LEVEL mapping");
+		}
+		amu->Set_ignore_unmapped_reads(parameters->Unmapped_Read_Policy == "IGNORE");
 		ftl->Address_Mapping_Unit = amu;
 
 		//Step 8: create GC_and_WL_unit

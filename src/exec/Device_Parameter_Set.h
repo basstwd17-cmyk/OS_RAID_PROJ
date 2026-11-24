@@ -45,6 +45,7 @@ public:
 	double End_of_Life_Threshold;//Remaining OP ratio at/below which the SSD reaches EOL
 	std::string End_of_Life_Mode = "OP_RATIO";
 	double End_of_Life_TEC_Threshold_Percent = 100.0;
+	std::string Unmapped_Read_Policy = "INITIALIZE";
 	double GC_Exec_Threshold;//The threshold for the ratio of free pages that used to trigger GC
 	SSD_Components::GC_Block_Selection_Policy_Type GC_Block_Selection_Policy;
 	bool Use_Copyback_for_GC;

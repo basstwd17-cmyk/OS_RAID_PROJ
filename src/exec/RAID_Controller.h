@@ -247,6 +247,7 @@ private:
 	std::deque<SSD_Components::User_Request*> blocked_user_requests;
 	uint64_t peak_blocked_requests = 0;
 	uint64_t preconditioned_valid_sectors = 0;
+	uint64_t ignored_unmapped_read_sectors = 0;
 
 	SSD_Components::User_Request* Create_sub_request(const SSD_Components::User_Request* original, const RAID_Sub_Request& part) const;
 	io_request_id_type Submit_background_copy(const RAID_Policy::StripeCopyPlan& copy, bool is_write, uint64_t task_index);
@@ -255,7 +256,8 @@ private:
 	void Complete_buffered_user_request(SSD_Components::User_Request* request);
 	void Try_replay_blocked_requests();
 	unsigned int Swans_mapping_chunk_length(const RAID_Policy::ZoneResolveResult& resolved, unsigned int remaining) const;
-	std::vector<uint64_t> Collect_zone_ids(LHA_type lba, unsigned int lba_count) const;
+	std::vector<uint64_t> Collect_zone_ids(LHA_type lba, unsigned int lba_count,
+		bool read = false) const;
 	bool Maybe_apply_redirect(uint64_t zone_id);
 	std::vector<RAID_Policy::MigrationTask> Build_migration_tasks(const std::vector<RAID_Policy::MigrationOp>& ops) const;
 	bool Has_inflight_user_io_on_migrating_zone() const;

@@ -106,7 +106,7 @@ def check_migration_csv(folder, report, workload='workload'):
     return rows
 
 
-def check_epoch_handoff(binary, folder):
+def check_epoch_handoff(binary, folder, policy='INITIALIZE'):
     folder.mkdir()
     period = 10000000
     device = ET.parse(ROOT / 'ssdconfig.xml')
@@ -122,6 +122,7 @@ def check_epoch_handoff(binary, folder):
         'SWANS_TH_Precautionary': 1, 'SWANS_TH_Critical': 2,
         'SWANS_Epoch_Migration': period,
         'RAID_Telemetry_Enabled': 'false',
+        'Unmapped_Read_Policy': policy,
     }.items():
         setting(device, key, value)
     device.write(folder / 'ssd.xml')

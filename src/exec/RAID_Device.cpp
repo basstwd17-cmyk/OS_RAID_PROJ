@@ -164,6 +164,7 @@ RAID_Device::RAID_Device(Device_Parameter_Set* parameters, std::vector<IO_Flow_P
 		parameters->SWANS_Zone_Popularity_Period);
 	RAID_Policy::MigrationLimits limits;
 	limits.On_demand = on_demand;
+	limits.Ignore_unmapped_reads = parameters->Unmapped_Read_Policy == "IGNORE";
 	limits.Period = parameters->SWANS_Epoch_Migration;
 	limits.Slice_time = parameters->SWANS_Migration_Slice_Time;
 	limits.Slice_sectors = parameters->SWANS_Migration_Slice_Sectors;
@@ -275,6 +276,10 @@ void RAID_Device::Perform_preconditioning(std::vector<Utils::Workload_Statistics
 	}
 	for (auto &ssd : ssds) {
 		ssd->Perform_preconditioning(workload_stats);  // 각 SSD에 대해 워밍업 수행
+	}
+	if (ssd_configs.front().SWANS_Enabled && ssd_configs.front().Enabled_Preconditioning
+		&& ssd_configs.front().Unmapped_Read_Policy == "IGNORE") {
+		raid_controller->Register_preconditioned_data(ssd_configs.front().Flash_Parameters.Page_Capacity / SECTOR_SIZE_IN_BYTE);
 	}
 } 
 

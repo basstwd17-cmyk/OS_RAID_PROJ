@@ -435,6 +435,9 @@ namespace SSD_Components
 
 	void Address_Mapping_Unit_Page_Level::Execute_simulator_event(MQSimEngine::Sim_Event* event)
 	{
+		auto* transaction = static_cast<NVM_Transaction_Flash_RD*>(event->Parameters);
+		ftl->Data_cache_manager->Complete_read_without_flash(transaction);
+		delete transaction;
 	}
 
 	void Address_Mapping_Unit_Page_Level::Store_mapping_table_on_flash_at_start()
@@ -526,6 +529,7 @@ namespace SSD_Components
 
 	bool Address_Mapping_Unit_Page_Level::query_cmt(NVM_Transaction_Flash* transaction)
 	{
+		if (ignore_unmapped_read(transaction)) return true;
 		stream_id_type stream_id = transaction->Stream_id;
 		Stats::total_CMT_queries++;
 		Stats::total_CMT_queries_per_stream[stream_id]++;
@@ -595,11 +599,34 @@ namespace SSD_Components
 		}
 	}
 
+	bool Address_Mapping_Unit_Page_Level::ignore_unmapped_read(NVM_Transaction_Flash* transaction)
+	{
+		if (!ignore_unmapped_reads || transaction->Type != Transaction_Type::READ
+			|| transaction->Source != Transaction_Source_Type::USERIO || !transaction->UserIORequest) return false;
+		auto* read = static_cast<NVM_Transaction_Flash_RD*>(transaction);
+		if (read->RelatedWrite) return false;
+		PPA_type ppa;
+		page_status_type state;
+		Get_data_mapping_info_for_gc(read->Stream_id, read->LPA, ppa, state);
+		if (ppa != NO_PPA) return false;
+		page_status_type missing = read->read_sectors_bitmap;
+		unsigned int ignored = 0;
+		while (missing) {
+			missing &= missing - 1;
+			++ignored;
+		}
+		ignored_unmapped_read_sectors += ignored;
+		// Defer completion so dispatch can finish iterating the request's list.
+		Simulator->Register_sim_event(Simulator->Time() + 1, this, read);
+		return true;
+	}
+
 	/*This function should be invoked only if the address translation entry exists in CMT.
 	* Otherwise, the call to the CMT->Rerieve_ppa, within this function, will throw an exception.
 	*/
 	bool Address_Mapping_Unit_Page_Level::translate_lpa_to_ppa(stream_id_type streamID, NVM_Transaction_Flash* transaction)
 	{
+		if (ignore_unmapped_read(transaction)) return true;
 		PPA_type ppa = domains[streamID]->Get_ppa(ideal_mapping_table, streamID, transaction->LPA);
 
 		if (transaction->Type == Transaction_Type::READ) {

@@ -124,8 +124,9 @@ bool MigrationExecutor::Lazy_touches_cold(const SSD_Components::User_Request* re
     unsigned int remaining = request->SizeInSectors;
     while (remaining) {
         ZoneResolveResult r; directory.Resolve(lba, r);
-        if (r.Zone_id == lazy.Task.Op.Cold_zone) return true;
         const auto chunk = static_cast<unsigned int>(std::min<uint64_t>(remaining, directory.Zone_size_lba() - r.Zone_lba_offset));
+        if (r.Zone_id == lazy.Task.Op.Cold_zone && (!limits.Ignore_unmapped_reads
+            || !directory.Is_empty(r.Zone_id))) return true;
         lba += chunk; remaining -= chunk;
     }
     return false;

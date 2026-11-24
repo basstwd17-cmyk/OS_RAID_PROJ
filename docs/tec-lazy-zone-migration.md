@@ -1,5 +1,13 @@
 # TEC / PWL 기반 RAID0 lazy zone migration
 
+## 미매핑 읽기 설정
+
+`ssdconfig.xml`의 `Device_Parameter_Set` 안에 `<Unmapped_Read_Policy>INITIALIZE</Unmapped_Read_Policy>`를 둔다. 생략 시 INITIALIZE이며 기존 첫 읽기 초기화와 zone 기록을 유지한다.
+
+`IGNORE`는 PPA가 없는 host 읽기를 새 페이지·매핑·zone 유효 데이터 생성 없이 완료한다. PPA가 있으면 요청 sector가 미기록이어도 기존 NAND 읽기를 수행하며 그 sector를 zone 유효 데이터로 추가하지 않는다. 같은 요청의 매핑된 page는 정상적으로 읽는다. Host 요청·읽기 sector 완료 집계에는 전체 요청을 포함한다. FTL 생략 완료는 안전한 이벤트 처리에 필요한 1 ns 뒤에 통지하며 NAND 지연은 추가하지 않는다.
+
+이 정책은 PAGE_LEVEL에서 지원한다. 캐시에 있는 데이터는 기존 캐시 경로로 제공하고, 사전 초기화된 데이터는 유지한다. 결과 XML의 `Unmapped_Read_Policy`, `Ignored_Unmapped_Read_Sectors`, `RAID_Ignored_Unmapped_Read_Sectors`, `SWANS_Empty_User_Zones`, `SWANS_Valid_User_Sectors`로 적용 결과를 확인한다. INITIALIZE는 기존 호환 동작이므로 PPA가 있는 page의 미기록 sector도 READ 관측 시 zone에 표시할 수 있다.
+
 상태 평가, extra zone, EAGER/ON_DEMAND를 독립적으로 선택하는 설정과 8개 예제는 [실험 옵션 안내](swans-policy-options.md)를 참고한다. ON_DEMAND에서도 REDIRECT를 지원한다.
 
 이 브랜치는 `experiment/tec-swans-src-only`의 `aba1b9d`를 기준으로 교수님이 제안한 RAID0 정책의 남은 경로를 구현한다. `professor/greedy-circular-wrap-error`의 별도 오류 수정 커밋은 합치지 않았다. 기본 `ssdconfig.xml`, `workload.xml`과 EAGER 경로는 유지하며 새 정책은 `SWANS_Migration_Mode=ON_DEMAND`로 선택한다.
